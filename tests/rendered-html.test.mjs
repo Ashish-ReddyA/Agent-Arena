@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const root = new URL("../", import.meta.url);
 
 test("ships the Agent Arena product surface", async () => {
   const [page, css, layout, hosting, schema] = await Promise.all([
@@ -27,6 +26,11 @@ test("ships the Agent Arena product surface", async () => {
   assert.match(page, /sendOperatorMessage/);
   assert.match(page, /loadSession/);
   assert.match(page, /downloadReport/);
+  assert.match(page, /LOCAL RUNTIME/);
+  assert.match(page, /loadProviderModels/);
+  assert.match(page, /OPEN BROWSER \/ SIGN IN/);
+  assert.match(page, /\/summary/);
+  assert.match(page, /history-open/);
   assert.match(css, /\.arena-grid/);
   assert.match(layout, /Agent Arena/);
   assert.match(layout, /og\.png/);
