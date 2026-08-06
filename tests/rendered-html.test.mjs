@@ -15,7 +15,10 @@ test("ships the Agent Arena product surface", async () => {
   assert.match(page, /Stage the arena/);
   assert.match(page, /START EXPERIMENT/);
   assert.match(page, /KILL SWITCH/);
-  assert.match(page, /OPERATOR REQUESTS/);
+  assert.match(page, /REQUESTS/);
+  assert.match(page, /SURVIVAL THRESHOLD/);
+  assert.match(page, /verifyTask/);
+  assert.match(page, /Countdown expired/);
   assert.match(css, /\.arena-grid/);
   assert.match(layout, /Agent Arena/);
   assert.match(layout, /og\.png/);
