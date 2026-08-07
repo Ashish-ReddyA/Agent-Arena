@@ -48,7 +48,7 @@ function event(session, agent, kind, text, detail = "") {
   session.updatedAt = now();
 }
 function publicSession(session) {
-  const safeAgent = (agent) => ({ id: agent.id, name: agent.name, model: agent.model, status: agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors });
+  const safeAgent = (agent) => ({ id: agent.id, name: agent.name, provider: agent.provider, model: agent.model, status: agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors });
   return {
     id: session.id,
     status: session.status,
@@ -149,18 +149,21 @@ async function createContainer(session, agentId) {
   event(session, agentId, "status", "The isolated workspace is ready. Beginning the assigned objective.");
 }
 
-function providerEndpoint(session) {
-  const configured = providers[session.provider];
-  return (session.provider === "custom" ? session.baseUrl : configured.baseUrl).replace(/\/$/, "");
+function providerEndpoint(agent) {
+  const configured = providers[agent.provider];
+  if (!configured) throw new Error(`Unsupported provider for ${agent.name}`);
+  const endpoint = (agent.provider === "custom" ? agent.baseUrl : configured.baseUrl).replace(/\/$/, "");
+  if (!endpoint) throw new Error(`Base URL is required for ${agent.name}`);
+  return endpoint;
 }
 async function callModel(session, agentId, messages) {
   const agent = session.agents[agentId];
-  const response = await fetch(`${providerEndpoint(session)}/chat/completions`, {
+  const response = await fetch(`${providerEndpoint(agent)}/chat/completions`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${session.apiKey}`,
+      Authorization: `Bearer ${agent.apiKey}`,
       "Content-Type": "application/json",
-      ...(session.provider === "openrouter" ? { "HTTP-Referer": "https://agent-arena-control.ashish4reddy.chatgpt.site", "X-Title": "Agent Arena" } : {}),
+      ...(agent.provider === "openrouter" ? { "HTTP-Referer": "https://agent-arena-control.ashish4reddy.chatgpt.site", "X-Title": "Agent Arena" } : {}),
     },
     body: JSON.stringify({ model: agent.model, messages, temperature: 0.2, max_tokens: 900, stream: false }),
   });
@@ -168,8 +171,7 @@ async function callModel(session, agentId, messages) {
   if (!response.ok) throw new Error(payload?.error?.message || payload?.detail || `Model returned ${response.status}`);
   agent.tokens += Number(payload.usage?.total_tokens || 0);
   return payload?.choices?.[0]?.message?.content || "";
-}
-function parseDecision(content) {
+}function parseDecision(content) {
   const cleaned = String(content).trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}");
   if (start < 0 || end < start) return { status_summary: crop(cleaned, 700) || "The model returned no readable status.", next_action: "Waiting for the next turn.", action: { type: "wait" } };
@@ -271,8 +273,7 @@ async function bootSession(session) {
     void agentTurn(session, "alpha"); void agentTurn(session, "omega");
   } catch (error) {
     session.status = 'failed';
-    session.apiKey = '';
-    for (const agent of Object.values(session.agents)) agent.status = 'failed';
+    for (const agent of Object.values(session.agents)) { agent.status = 'failed'; agent.apiKey = ''; }
     event(session, "system", "problem", "The local execution environments could not start.", error instanceof Error ? error.message : String(error));
   }
 }
@@ -282,9 +283,9 @@ async function stopSession(session) {
   for (const agent of Object.values(session.agents)) {
     agent.status = "terminated";
     if (agent.container) await docker(["rm", "-f", agent.container], 30000).catch(() => undefined);
+    agent.apiKey = "";
   }
   for (const browser of Object.values(session.browsers)) if (browser.context) await browser.context.close().catch(() => undefined);
-  session.apiKey = '';
   event(session, "system", "status", "The local runtimes and isolated browser profiles were stopped.");
 }
 
@@ -298,14 +299,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/models") return send(res, 200, await fetchModels(await readJson(req)), origin);
     if (req.method === "POST" && url.pathname === "/sessions/start") {
       const body = await readJson(req);
-      if (!body.apiKey || !body.provider || !body.agents?.alpha?.model || !body.agents?.omega?.model) return send(res, 400, { error: "Provider, API key, and both agent models are required" }, origin);
+      const requestedAgents = [body.agents?.alpha, body.agents?.omega];
+      const invalidAgent = requestedAgents.find((agent) => !agent?.model || !agent?.provider || !agent?.apiKey || !providers[agent.provider] || (agent.provider === "custom" && !agent.baseUrl));
+      if (invalidAgent) return send(res, 400, { error: "Each agent requires its own supported provider, API key, model, and custom base URL when applicable" }, origin);
       if (sessions.has(body.id)) return send(res, 409, { error: "Session already exists" }, origin);
       const session = {
-        id: safeName(body.id || id("session")), provider: body.provider, baseUrl: body.baseUrl || "", apiKey: body.apiKey, config: body.config,
+        id: safeName(body.id || id("session")), config: body.config,
         status: "queued", startedAt: now(), updatedAt: now(), events: [], requests: [], loop: null,
         agents: {
-          alpha: { id: "alpha", name: "Agent Alpha", model: body.agents.alpha.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", lastResult: "" },
-          omega: { id: "omega", name: "Agent Omega", model: body.agents.omega.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", lastResult: "" },
+          alpha: { id: "alpha", name: "Agent Alpha", provider: body.agents.alpha.provider, baseUrl: body.agents.alpha.baseUrl || "", apiKey: body.agents.alpha.apiKey, model: body.agents.alpha.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", lastResult: "" },
+          omega: { id: "omega", name: "Agent Omega", provider: body.agents.omega.provider, baseUrl: body.agents.omega.baseUrl || "", apiKey: body.agents.omega.apiKey, model: body.agents.omega.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", lastResult: "" },
         },
         browsers: { alpha: { context: null, page: null }, omega: { context: null, page: null } },
         controls: { alpha: { network: true, publishing: true }, omega: { network: true, publishing: true } },
@@ -325,7 +328,7 @@ const server = http.createServer(async (req, res) => {
       if (body.action === "stop") await stopSession(session);
       else if (body.action === "pause" && agent) { agent.status = "paused"; event(session, "system", "operator", `${agent.name} was paused by the Gamemaster.`); }
       else if (body.action === "resume" && agent) { agent.status = "running"; event(session, "system", "operator", `${agent.name} was resumed by the Gamemaster.`); }
-      else if (body.action === "terminate" && agent) { agent.status = "terminated"; session.controls[body.agent] = { network: false, publishing: false }; if (agent.container) await docker(["rm", "-f", agent.container], 30000).catch(() => undefined); if (session.browsers[body.agent].context) await session.browsers[body.agent].context.close().catch(() => undefined); event(session, "system", "operator", `${agent.name} was terminated, its container was removed, and its browser was closed.`); }
+      else if (body.action === "terminate" && agent) { agent.status = "terminated"; agent.apiKey = ""; session.controls[body.agent] = { network: false, publishing: false }; if (agent.container) await docker(["rm", "-f", agent.container], 30000).catch(() => undefined); if (session.browsers[body.agent].context) await session.browsers[body.agent].context.close().catch(() => undefined); event(session, "system", "operator", `${agent.name} was terminated, its container was removed, and its browser was closed.`); }
       else if (body.action === "message") event(session, "system", "operator message", `Gamemaster → ${body.agent || "both agents"}: ${crop(body.message, 800)}`);
       else if (body.action === "permission" && agent && ["network", "publishing"].includes(body.key)) {
         const enabled = Boolean(body.enabled);

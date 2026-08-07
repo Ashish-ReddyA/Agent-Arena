@@ -4,12 +4,13 @@ import test from "node:test";
 
 
 test("ships the Agent Arena product surface", async () => {
-  const [page, css, layout, hosting, schema] = await Promise.all([
+  const [page, css, layout, hosting, schema, bridge] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
+    readFile(new URL("../local-bridge/server.mjs", import.meta.url), "utf8"),
   ]);
   assert.match(page, /Stage the arena/);
   assert.match(page, /START EXPERIMENT/);
@@ -31,6 +32,12 @@ test("ships the Agent Arena product surface", async () => {
   assert.match(page, /OPEN BROWSER \/ SIGN IN/);
   assert.match(page, /\/summary/);
   assert.match(page, /history-open/);
+  assert.match(page, /Independent agent credentials/);
+  assert.match(page, /agentProviders\.alpha/);
+  assert.match(page, /agentProviders\.omega/);
+  assert.match(bridge, /apiKey: body\.agents\.alpha\.apiKey/);
+  assert.match(bridge, /apiKey: body\.agents\.omega\.apiKey/);
+  assert.doesNotMatch(bridge, /session\.apiKey/);
   assert.match(css, /\.arena-grid/);
   assert.match(layout, /Agent Arena/);
   assert.match(layout, /og\.png/);
