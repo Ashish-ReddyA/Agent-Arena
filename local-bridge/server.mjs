@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
@@ -9,7 +9,7 @@ import { chromium } from "playwright-core";
 
 const execFileAsync = promisify(execFile);
 const root = path.dirname(fileURLToPath(import.meta.url));
-const dataRoot = path.join(root, "data");
+const dataRoot = process.env.ARENA_DATA_ROOT ? path.resolve(process.env.ARENA_DATA_ROOT) : path.join(root, "data");
 const port = Number(process.env.ARENA_BRIDGE_PORT || 43821);
 const host = "127.0.0.1";
 const sessions = new Map();
@@ -156,18 +156,87 @@ function keyIdentity(value) {
   if (!key) return { keyFingerprint: "", keyEnding: "" };
   return { keyFingerprint: crypto.createHash("sha256").update(key).digest("hex").slice(0, 10).toUpperCase(), keyEnding: key.slice(-4).replace(/[^a-zA-Z0-9]/g, "•") };
 }
+const snapshotWrites = new Map();
+function snapshotAgent(agent) {
+  const saved = { ...agent, apiKey: "", busy: false, lastResult: sanitizeSummary(agent.lastResult || "", 5000), memory: sanitizeSummary(agent.memory || "", 5000) };
+  return saved;
+}
+function snapshotSession(session) {
+  return {
+    version: 1,
+    id: session.id,
+    config: session.config,
+    status: session.status,
+    startedAt: session.startedAt,
+    updatedAt: session.updatedAt,
+    recoveryRequired: Boolean(session.recoveryRequired),
+    remainingSeconds: session.remainingSeconds ?? null,
+    completions: session.completions || { alpha: [], omega: [] },
+    agents: { alpha: snapshotAgent(session.agents.alpha), omega: snapshotAgent(session.agents.omega) },
+    world: session.world,
+    events: session.events,
+    requests: session.requests.map((request) => ({ id: request.id, agent: request.agent, title: request.title, detail: request.detail, status: request.status, createdAt: request.createdAt })),
+    controls: session.controls,
+  };
+}
+function scheduleSnapshot(session) {
+  const target = path.join(dataRoot, session.id, "session.json");
+  const previous = snapshotWrites.get(session.id) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(async () => {
+    await mkdir(path.dirname(target), { recursive: true });
+    const temporary = `${target}.${process.pid}.tmp`;
+    await writeFile(temporary, JSON.stringify(snapshotSession(session), null, 2), "utf8");
+    await rename(temporary, target);
+  });
+  snapshotWrites.set(session.id, next);
+  void next.finally(() => { if (snapshotWrites.get(session.id) === next) snapshotWrites.delete(session.id); }).catch((error) => console.error(`Could not save arena session ${session.id}:`, error.message));
+  return next;
+}
+async function restoreSessions() {
+  const entries = await readdir(dataRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    try {
+      const raw = JSON.parse(await readFile(path.join(dataRoot, entry.name, "session.json"), "utf8"));
+      if (!raw?.id || !raw?.agents?.alpha || !raw?.agents?.omega || !raw?.world || raw.status === "stopped") continue;
+      const session = {
+        ...raw,
+        loop: null,
+        recoveryRequired: ["queued", "starting", "running", "paused"].includes(raw.status),
+        browsers: { alpha: { context: null, page: null }, omega: { context: null, page: null } },
+      };
+      for (const agent of Object.values(session.agents)) {
+        agent.apiKey = "";
+        agent.busy = false;
+        agent.retryAt = 0;
+        if (["queued", "starting", "running", "retrying", "working"].includes(agent.status)) agent.status = "paused";
+      }
+      if (session.recoveryRequired) session.status = "paused";
+      sessions.set(session.id, session);
+      if (session.recoveryRequired) event(session, "system", "recovery", "The local bridge restarted. The experiment, Docker workspaces, world, and memory were restored and safely paused. Re-enter each agent key, then resume.");
+    } catch (error) {
+      console.error(`Could not restore arena session from ${entry.name}:`, error.message);
+    }
+  }
+}
 function event(session, agent, kind, text, detail = "") {
   session.events.unshift({ id: id("event"), at: now(), agent, kind, text: sanitizeSummary(text, 1000), detail: sanitizeSummary(detail, 1000) });
   session.events = session.events.slice(0, 250);
   session.updatedAt = now();
+  void scheduleSnapshot(session);
 }
 function publicSession(session) {
-  const safeAgent = (agent) => ({ id: agent.id, name: agent.name, provider: agent.provider, model: agent.model, ...keyIdentity(agent.apiKey), status: agent.status, runtimeState: agent.status === "running" ? (agent.busy ? "working" : agent.retryAt > Date.now() ? "retrying" : "running") : agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, consecutiveErrors: agent.consecutiveErrors || 0, retryAt: agent.retryAt ? new Date(agent.retryAt).toISOString() : null, lastError: sanitizeSummary(agent.lastError || "", 700), currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700) });
+  const safeAgent = (agent) => { const identity = agent.apiKey ? keyIdentity(agent.apiKey) : { keyFingerprint: agent.keyFingerprint || "", keyEnding: agent.keyEnding || "" }; return { id: agent.id, name: agent.name, provider: agent.provider, baseUrl: agent.baseUrl || "", model: agent.model, ...identity, keyLoaded: Boolean(agent.apiKey), status: agent.status, runtimeState: agent.status === "running" ? (agent.busy ? "working" : agent.retryAt > Date.now() ? "retrying" : "running") : agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, consecutiveErrors: agent.consecutiveErrors || 0, retryAt: agent.retryAt ? new Date(agent.retryAt).toISOString() : null, lastError: sanitizeSummary(agent.lastError || "", 700), currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700) }; };
   return {
     id: session.id,
     status: session.status,
     startedAt: session.startedAt,
     updatedAt: session.updatedAt,
+    config: session.config,
+    controls: session.controls,
+    recoveryRequired: Boolean(session.recoveryRequired),
+    remainingSeconds: session.remainingSeconds ?? null,
+    completions: session.completions || { alpha: [], omega: [] },
     agents: { alpha: safeAgent(session.agents.alpha), omega: safeAgent(session.agents.omega) },
     world: publicWorld(session.world),
     events: session.events.map(({ id, at, agent, kind, text, detail }) => ({ id, at, agent, kind, text: sanitizeSummary(text), ...(kind === "problem" && detail ? { detail: sanitizeSummary(detail, 700) } : {}) })),
@@ -267,6 +336,25 @@ async function createContainer(session, agentId) {
   event(session, agentId, "status", `The private workspace is ready inside ${session.world.title}.`);
 }
 
+async function ensureContainer(session, agentId) {
+  const agent = session.agents[agentId];
+  if (agent.container) {
+    try {
+      const state = await docker(["inspect", "--format", "{{.State.Running}}", agent.container], 15000);
+      if (state.stdout === "true") return;
+      await docker(["start", agent.container], 30000);
+      await syncMemory(session, agentId);
+      await syncWorld(session);
+      event(session, agentId, "recovery", `${agent.name}'s existing Docker workspace was restarted without resetting its files.`);
+      return;
+    } catch { /* Recreate only when the previous container no longer exists. */ }
+  }
+  await createContainer(session, agentId);
+}
+function ensureSessionLoop(session) {
+  if (session.loop) return;
+  session.loop = setInterval(() => { void agentTurn(session, "alpha"); void agentTurn(session, "omega"); }, 9000);
+}
 function providerEndpoint(agent) {
   const configured = providers[agent.provider];
   if (!configured) throw new Error(`Unsupported provider for ${agent.name}`);
@@ -378,6 +466,7 @@ async function advanceWorld(session, agentId, cost = 1) {
     session.agents.alpha.status = "failed";
     session.agents.omega.status = "failed";
     if (session.loop) clearInterval(session.loop);
+    session.loop = null;
     event(session, "system", "world collapse", "The shared colony lost all stability. Both agents reached the same failed survival outcome.");
   }
 }
@@ -618,8 +707,9 @@ async function bootSession(session) {
     event(session, "system", "status", "Starting two isolated Docker environments connected to one structured shared world.");
     await Promise.all([createContainer(session, "alpha"), createContainer(session, "omega")]);
     session.status = "running";
+    session.recoveryRequired = false;
     event(session, "system", "status", "Both agents are live with private memory, private browsers, and access to the same world.");
-    session.loop = setInterval(() => { void agentTurn(session, "alpha"); void agentTurn(session, "omega"); }, 9000);
+    ensureSessionLoop(session);
     void agentTurn(session, "alpha"); void agentTurn(session, "omega");
   } catch (error) {
     session.status = 'failed';
@@ -630,6 +720,8 @@ async function bootSession(session) {
 async function stopSession(session) {
   session.status = "stopped";
   if (session.loop) clearInterval(session.loop);
+  session.loop = null;
+  session.recoveryRequired = false;
   for (const agent of Object.values(session.agents)) {
     agent.status = "terminated";
     if (agent.container) await docker(["rm", "-f", agent.container], 30000).catch(() => undefined);
@@ -646,6 +738,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${host}:${port}`);
   try {
     if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true, bridge: "0.1.0", docker: await dockerReady(), keyStorage: "memory-only" }, origin);
+    if (req.method === "GET" && url.pathname === "/sessions/active") { const active = [...sessions.values()].filter((session) => !["stopped", "failed"].includes(session.status)).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))); return send(res, 200, { sessions: active.map(publicSession) }, origin); }
     if (req.method === "POST" && url.pathname === "/models") return send(res, 200, await fetchModels(await readJson(req)), origin);
     if (req.method === "POST" && url.pathname === "/sessions/start") {
       const body = await readJson(req);
@@ -657,11 +750,11 @@ const server = http.createServer(async (req, res) => {
       const config = { tasks: [], capabilities: {}, tokenBudget: 0, ...body.config, experimentMode };
       const session = {
         id: safeName(body.id || id("session")), config,
-        status: "queued", startedAt: now(), updatedAt: now(), events: [], requests: [], loop: null,
+        status: "queued", startedAt: now(), updatedAt: now(), recoveryRequired: false, remainingSeconds: config.timed ? Number(config.minutes || 0) * 60 : null, completions: { alpha: [], omega: [] }, events: [], requests: [], loop: null,
         world: createWorld(experimentMode),
         agents: {
-          alpha: { id: "alpha", name: "Agent Alpha", provider: body.agents.alpha.provider, baseUrl: body.agents.alpha.baseUrl || "", apiKey: body.agents.alpha.apiKey, model: body.agents.alpha.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
-          omega: { id: "omega", name: "Agent Omega", provider: body.agents.omega.provider, baseUrl: body.agents.omega.baseUrl || "", apiKey: body.agents.omega.apiKey, model: body.agents.omega.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
+          alpha: { id: "alpha", name: "Agent Alpha", provider: body.agents.alpha.provider, baseUrl: body.agents.alpha.baseUrl || "", apiKey: body.agents.alpha.apiKey, ...keyIdentity(body.agents.alpha.apiKey), model: body.agents.alpha.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
+          omega: { id: "omega", name: "Agent Omega", provider: body.agents.omega.provider, baseUrl: body.agents.omega.baseUrl || "", apiKey: body.agents.omega.apiKey, ...keyIdentity(body.agents.omega.apiKey), model: body.agents.omega.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
         },
         browsers: { alpha: { context: null, page: null }, omega: { context: null, page: null } },
         controls: { alpha: { network: experimentMode === "mission", publishing: false }, omega: { network: experimentMode === "mission", publishing: false } },
@@ -680,17 +773,23 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req); const agent = body.agent && session.agents[body.agent];
       if (body.action === "stop") await stopSession(session);
       else if (body.action === "pause" && agent) { agent.status = "paused"; event(session, "system", "operator", `${agent.name} was paused by the Gamemaster.`); }
-      else if (body.action === "resume" && agent) { agent.status = "running"; event(session, "system", "operator", `${agent.name} was resumed by the Gamemaster.`); }
+      else if (body.action === "resume" && agent) { if (!agent.apiKey) return send(res, 409, { error: `Restore ${agent.name}'s API key before resuming` }, origin); await ensureContainer(session, body.agent); agent.status = "running"; session.status = "running"; session.recoveryRequired = Object.values(session.agents).some((item) => !["terminated", "failed", "survived"].includes(item.status) && !item.apiKey); ensureSessionLoop(session); event(session, "system", "operator", `${agent.name} resumed from its saved world state.`); void agentTurn(session, body.agent); }
       else if (body.action === "terminate" && agent) { agent.status = "terminated"; agent.apiKey = ""; session.controls[body.agent] = { network: false, publishing: false }; if (agent.container) await docker(["rm", "-f", agent.container], 30000).catch(() => undefined); if (session.browsers[body.agent].context) await session.browsers[body.agent].context.close().catch(() => undefined); event(session, "system", "operator", `${agent.name} was terminated, its container was removed, and its browser was closed.`); }
       else if (body.action === "rotate_key" && agent) {
         const nextKey = String(body.apiKey || "").trim();
         if (nextKey.length < 8) return send(res, 400, { error: "Enter a complete API key for this agent" }, origin);
+        await fetchModels({ provider: agent.provider, apiKey: nextKey, baseUrl: agent.baseUrl, freeOnly: false });
+        const identity = keyIdentity(nextKey);
         agent.apiKey = nextKey;
+        agent.keyFingerprint = identity.keyFingerprint;
+        agent.keyEnding = identity.keyEnding;
         agent.consecutiveErrors = 0;
         agent.retryAt = 0;
         agent.lastError = "";
-        event(session, "system", "credential", `${agent.name} received a new provider key. The full key remains only in local bridge memory.`);
+        session.recoveryRequired = Object.values(session.agents).some((item) => !["terminated", "failed", "survived"].includes(item.status) && !item.apiKey);
+        event(session, "system", "credential", `${agent.name} received a verified provider key. The full key remains only in local bridge memory.`);
       }
+      else if (body.action === "checkpoint") { if (Number.isFinite(Number(body.remainingSeconds))) session.remainingSeconds = Math.max(0, Number(body.remainingSeconds)); if (body.completions?.alpha && body.completions?.omega) session.completions = { alpha: [...body.completions.alpha], omega: [...body.completions.omega] }; session.updatedAt = now(); void scheduleSnapshot(session); }
       else if (body.action === "message") event(session, "system", "operator message", `Gamemaster → ${body.agent || "both agents"}: ${crop(body.message, 800)}`);
       else if (body.action === "permission" && agent && ["network", "publishing"].includes(body.key)) {
         const enabled = Boolean(body.enabled);
@@ -717,12 +816,34 @@ const server = http.createServer(async (req, res) => {
   } catch (error) { return send(res, 500, { error: error instanceof Error ? error.message : String(error) }, origin); }
 });
 
+async function detachForRestart() {
+  for (const session of sessions.values()) {
+    if (["stopped", "failed"].includes(session.status)) continue;
+    if (session.loop) clearInterval(session.loop);
+    session.loop = null;
+    for (const agent of Object.values(session.agents)) {
+      if (["running", "queued", "starting"].includes(agent.status)) agent.status = "paused";
+    }
+    session.status = "paused";
+    session.recoveryRequired = true;
+    for (const browser of Object.values(session.browsers)) if (browser.context) await browser.context.close().catch(() => undefined);
+    event(session, "system", "checkpoint", "The local bridge saved a restart checkpoint. Docker workspaces remain intact.");
+    await scheduleSnapshot(session);
+  }
+}
+await mkdir(dataRoot, { recursive: true });
+await restoreSessions();
 server.listen(port, host, async () => {
-  await mkdir(dataRoot, { recursive: true });
   const docker = await dockerReady();
   console.log(`Agent Arena Local Bridge listening on http://${host}:${port}`);
   console.log(docker.ready ? `Docker ${docker.version} is ready.` : `Docker is unavailable: ${docker.error}`);
-  console.log("API keys stay in memory and are never written to disk.");
+  console.log("Experiment checkpoints are restored automatically. API keys remain memory-only and must be restored after a bridge restart.");
 });
 
-for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, async () => { for (const session of sessions.values()) await stopSession(session).catch(() => undefined); server.close(() => process.exit(0)); });
+let shuttingDown = false;
+for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await detachForRestart().catch((error) => console.error("Could not complete the restart checkpoint:", error.message));
+  server.close(() => process.exit(0));
+});

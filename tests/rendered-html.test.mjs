@@ -44,8 +44,12 @@ test("ships the Agent Arena product surface", async () => {
   assert.match(page, /WHY IT IS WAITING/);
   assert.match(page, /runtimeState/);
   assert.match(page, /ACTIVE API KEY/);
-  assert.match(page, /VERIFY &amp; CHANGE KEY/);
+  assert.match(page, /VERIFY & CHANGE KEY/);
+  assert.match(page, /VERIFY & RESTORE KEY/);
   assert.match(page, /rotateAgentKey/);
+  assert.match(page, /RECOVERED CHECKPOINT/);
+  assert.match(page, /hydrateLiveSession/);
+  assert.match(page, /sessions\/active/);
   assert.match(page, /experimentMode/);
   assert.match(bridge, /createWorld/);
   assert.match(bridge, /executeWorldAction/);
@@ -54,6 +58,9 @@ test("ships the Agent Arena product surface", async () => {
   assert.match(bridge, /describeAgentFailure/);
   assert.match(bridge, /runInModelLane/);
   assert.match(bridge, /keyIdentity/);
+  assert.match(bridge, /restoreSessions/);
+  assert.match(bridge, /scheduleSnapshot/);
+  assert.match(bridge, /detachForRestart/);
   assert.match(bridge, /body\.action === "rotate_key"/);
   assert.match(bridge, /action\.operation \|\| action\.action/);
   assert.match(bridge, /retryAt > Date\.now/);

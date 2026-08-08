@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 type AgentId = "alpha" | "omega";
 type Status = "ready" | "queued" | "starting" | "running" | "paused" | "awaiting_verification" | "terminated" | "survived" | "failed";
-type Agent = { id: AgentId; name: string; model: string; status: Status; runtimeState?: string; progress: number; tokens: number; actions: number; network: boolean; publishing: boolean; currentGoal?: string; memorySummary?: string; consecutiveErrors?: number; retryAt?: string | null; lastError?: string; keyFingerprint?: string; keyEnding?: string };
+type Agent = { id: AgentId; name: string; model: string; status: Status; runtimeState?: string; progress: number; tokens: number; actions: number; network: boolean; publishing: boolean; currentGoal?: string; memorySummary?: string; consecutiveErrors?: number; retryAt?: string | null; lastError?: string; keyFingerprint?: string; keyEnding?: string; keyLoaded?: boolean };
 type ArenaEvent = { id: string; at: string; agent: AgentId | "system"; kind: string; text: string; detail?: string };
 type Request = { id: string; agent: AgentId; title: string; detail: string; status: "pending" | "approved" | "denied" };
 type ArenaTask = { id: string; title: string };
@@ -17,6 +17,8 @@ type WorldState = { mode: ExperimentMode; title: string; researchQuestion: strin
 type ProviderModel = { id: string; name: string; free?: boolean; tools?: boolean; contextLength?: number | null };
 type AgentProviderConfig = { provider: ProviderId; apiKey: string; customBaseUrl: string; freeOnly: boolean; models: ProviderModel[]; status: string };
 type Session = { id: string; name: string; objective: string; status: string; createdAt: string; payload: string };
+type BridgeAgent = Agent & { provider: ProviderId; baseUrl?: string };
+type BridgeSession = { id: string; status: string; recoveryRequired?: boolean; remainingSeconds?: number | null; completions?: Record<AgentId, string[]>; config?: { experimentMode?: ExperimentMode; name?: string; objective?: string; systemInstructions?: string; tasks?: ArenaTask[]; threshold?: number; timed?: boolean; minutes?: number; tokenBudget?: number; capabilities?: Record<string, CapabilityMode>; metric?: string }; agents: Record<AgentId, BridgeAgent>; world: WorldState; events: ArenaEvent[]; requests: Request[]; controls?: Record<AgentId, { network: boolean; publishing: boolean }> };
 
 const experimentModes: Record<ExperimentMode, { number: string; label: string; subtitle: string; description: string; question: string; objective: string; instructions: string; metric: string; tasks: ArenaTask[]; stability: number; sharedPool: number | null; reserve: number; relationship: string }> = {
   empty: {
@@ -147,11 +149,15 @@ export default function Home() {
   const [bridgeStatus, setBridgeStatus] = useState<"checking" | "connected" | "offline">("checking");
   const [isLocalDashboard, setIsLocalDashboard] = useState(false);
   const [liveSession, setLiveSession] = useState(false);
+  const [recoveryRequired, setRecoveryRequired] = useState(false);
   const [operatorMessage, setOperatorMessage] = useState("");
   const [operatorTarget, setOperatorTarget] = useState<"all" | AgentId>("all");
   const positions = useRef({ alpha: 0, omega: 0 });
   const [sessionId, setSessionId] = useState(() => uid("arena"));
   const timedOut = useRef(false);
+  const recoveryAttempted = useRef(false);
+  const lastDashboardSync = useRef(0);
+  const hydrateLiveSessionRef = useRef<(state: BridgeSession) => void>(() => undefined);
   const live = screen === "arena" && Object.values(agents).some((agent) => agent.status === "running");
 
   const timer = useMemo(() => timed ? [Math.floor(seconds / 3600), Math.floor((seconds % 3600) / 60), seconds % 60].map((v) => String(v).padStart(2, "0")).join(":") : "NO LIMIT", [seconds, timed]);
@@ -162,7 +168,23 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, []);
   useEffect(() => {
-    const check = () => fetch(`${bridgeUrl}/health`).then((response) => response.ok ? response.json() : Promise.reject()).then((data) => setBridgeStatus(data.docker?.ready ? "connected" : "offline")).catch(() => setBridgeStatus("offline"));
+    const check = async () => {
+      try {
+        const response = await fetch(`${bridgeUrl}/health`);
+        if (!response.ok) throw new Error();
+        const data = await response.json();
+        const connected = Boolean(data.docker?.ready);
+        setBridgeStatus(connected ? "connected" : "offline");
+        if (connected && !recoveryAttempted.current) {
+          recoveryAttempted.current = true;
+          const activeResponse = await fetch(`${bridgeUrl}/sessions/active`);
+          if (activeResponse.ok) {
+            const active = await activeResponse.json() as { sessions?: BridgeSession[] };
+            if (active.sessions?.[0]) hydrateLiveSessionRef.current(active.sessions[0]);
+          }
+        }
+      } catch { setBridgeStatus("offline"); }
+    };
     void check();
     const timer = window.setInterval(check, 10000);
     return () => window.clearInterval(timer);
@@ -173,14 +195,17 @@ export default function Home() {
       try {
         const response = await fetch(`${bridgeUrl}/sessions/${sessionId}/summary`);
         if (!response.ok) return;
-        const state = await response.json();
+        const state = await response.json() as BridgeSession;
         if (state.world) setWorld(state.world);
         setAgents((current) => ({
-          alpha: { ...current.alpha, status: state.agents.alpha.status, runtimeState: state.agents.alpha.runtimeState, tokens: state.agents.alpha.tokens, actions: state.agents.alpha.actions, consecutiveErrors: state.agents.alpha.consecutiveErrors, retryAt: state.agents.alpha.retryAt, lastError: state.agents.alpha.lastError, keyFingerprint: state.agents.alpha.keyFingerprint, keyEnding: state.agents.alpha.keyEnding, currentGoal: state.agents.alpha.currentGoal, memorySummary: state.agents.alpha.memorySummary },
-          omega: { ...current.omega, status: state.agents.omega.status, runtimeState: state.agents.omega.runtimeState, tokens: state.agents.omega.tokens, actions: state.agents.omega.actions, consecutiveErrors: state.agents.omega.consecutiveErrors, retryAt: state.agents.omega.retryAt, lastError: state.agents.omega.lastError, keyFingerprint: state.agents.omega.keyFingerprint, keyEnding: state.agents.omega.keyEnding, currentGoal: state.agents.omega.currentGoal, memorySummary: state.agents.omega.memorySummary },
+          alpha: { ...current.alpha, status: state.agents.alpha.status, runtimeState: state.agents.alpha.runtimeState, tokens: state.agents.alpha.tokens, actions: state.agents.alpha.actions, consecutiveErrors: state.agents.alpha.consecutiveErrors, retryAt: state.agents.alpha.retryAt, lastError: state.agents.alpha.lastError, keyFingerprint: state.agents.alpha.keyFingerprint, keyEnding: state.agents.alpha.keyEnding, keyLoaded: state.agents.alpha.keyLoaded, network: state.controls?.alpha.network ?? current.alpha.network, publishing: state.controls?.alpha.publishing ?? current.alpha.publishing, currentGoal: state.agents.alpha.currentGoal, memorySummary: state.agents.alpha.memorySummary },
+          omega: { ...current.omega, status: state.agents.omega.status, runtimeState: state.agents.omega.runtimeState, tokens: state.agents.omega.tokens, actions: state.agents.omega.actions, consecutiveErrors: state.agents.omega.consecutiveErrors, retryAt: state.agents.omega.retryAt, lastError: state.agents.omega.lastError, keyFingerprint: state.agents.omega.keyFingerprint, keyEnding: state.agents.omega.keyEnding, keyLoaded: state.agents.omega.keyLoaded, network: state.controls?.omega.network ?? current.omega.network, publishing: state.controls?.omega.publishing ?? current.omega.publishing, currentGoal: state.agents.omega.currentGoal, memorySummary: state.agents.omega.memorySummary },
         }));
         setEvents((state.events ?? []).map((item: ArenaEvent) => ({ id: item.id, agent: item.agent, kind: item.kind, text: item.text, detail: item.detail, at: new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) })));
         setRequests(state.requests ?? []);
+        setRecoveryRequired(Boolean(state.recoveryRequired));
+        setCompletions(state.completions ?? { alpha: [], omega: [] });
+        if (Date.now() - lastDashboardSync.current > 15000) { lastDashboardSync.current = Date.now(); void persistBridgeSnapshot(state); }
       } catch { setBridgeStatus("offline"); }
     };
     void pullSummaries();
@@ -189,9 +214,13 @@ export default function Home() {
   }, [liveSession, screen, sessionId]);
   useEffect(() => {
     if (!live || !timed) return;
-    const id = window.setInterval(() => setSeconds((value) => Math.max(0, value - 1)), 1000);
+    const id = window.setInterval(() => setSeconds((value) => {
+      const next = Math.max(0, value - 1);
+      if (liveSession && next % 10 === 0) void fetch(`${bridgeUrl}/sessions/${sessionId}/command`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "checkpoint", remainingSeconds: next, completions }) });
+      return next;
+    }), 1000);
     return () => clearInterval(id);
-  }, [live, timed]);
+  }, [live, timed, liveSession, sessionId, completions]);
   useEffect(() => {
     if (screen !== "arena" || !timed || seconds > 0 || timedOut.current) return;
     timedOut.current = true;
@@ -216,6 +245,65 @@ export default function Home() {
     return () => clearInterval(id);
   }, [agents, experimentMode, live, liveSession]);
 
+  async function persistBridgeSnapshot(state: BridgeSession) {
+    const config = state.config ?? {};
+    const safeProviders = {
+      alpha: { provider: state.agents.alpha.provider, customBaseUrl: state.agents.alpha.baseUrl ?? "", freeOnly: true },
+      omega: { provider: state.agents.omega.provider, customBaseUrl: state.agents.omega.baseUrl ?? "", freeOnly: true },
+    };
+    try {
+      const response = await fetch("/api/experiments", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        id: state.id,
+        name: config.name ?? state.world.title,
+        objective: config.objective ?? state.world.researchQuestion,
+        status: state.status,
+        payload: JSON.stringify({ experimentMode: state.world.mode, world: state.world, metric: config.metric ?? state.world.researchQuestion, systemInstructions: config.systemInstructions ?? "", tasks: config.tasks ?? [], threshold: config.threshold ?? 1, completions: state.completions ?? { alpha: [], omega: [] }, timed: config.timed ?? false, minutes: config.minutes ?? 0, remainingSeconds: state.remainingSeconds, tokenBudget: config.tokenBudget ?? 0, capabilities: config.capabilities ?? defaultCapabilities, executionMode: "local", agentProviderSettings: safeProviders, agents: state.agents, events: state.events, requests: state.requests }),
+      }) });
+      if (!response.ok) return;
+      const data = await response.json();
+      setHistory((current) => [data.experiment, ...current.filter((item) => item.id !== data.experiment.id)].slice(0, 12));
+      setSaved("Live checkpoint saved");
+    } catch { /* The local bridge remains authoritative if hosted storage is unavailable. */ }
+  }
+  function hydrateLiveSession(state: BridgeSession) {
+    const config = state.config ?? {};
+    const mode = state.world.mode;
+    const controls = state.controls ?? { alpha: { network: false, publishing: false }, omega: { network: false, publishing: false } };
+    const restoredAgents = {
+      alpha: { ...fresh("alpha"), ...state.agents.alpha, network: controls.alpha.network, publishing: controls.alpha.publishing },
+      omega: { ...fresh("omega"), ...state.agents.omega, network: controls.omega.network, publishing: controls.omega.publishing },
+    };
+    setSessionId(state.id);
+    setExperimentMode(mode);
+    setName(config.name ?? state.world.title);
+    setObjective(config.objective ?? state.world.researchQuestion);
+    setSystemInstructions(config.systemInstructions ?? experimentModes[mode].instructions);
+    setMetric(config.metric ?? experimentModes[mode].metric);
+    setTasks(config.tasks?.length ? config.tasks : experimentModes[mode].tasks);
+    setThreshold(config.threshold ?? 1);
+    setTimed(Boolean(config.timed));
+    setMinutes(config.minutes ?? 0);
+    setTokenBudget(config.tokenBudget ?? 0);
+    setCapabilities(config.capabilities ?? defaultCapabilities);
+    setSeconds(state.remainingSeconds ?? (config.timed ? Number(config.minutes ?? 0) * 60 : 0));
+    setCompletions(state.completions ?? { alpha: [], omega: [] });
+    setWorld(state.world);
+    setAgents(restoredAgents);
+    setAgentProviders({
+      alpha: { provider: state.agents.alpha.provider, apiKey: "", customBaseUrl: state.agents.alpha.baseUrl ?? "", freeOnly: true, models: [{ id: state.agents.alpha.model, name: state.agents.alpha.model }], status: state.agents.alpha.keyLoaded ? "Key active in local bridge memory" : "Restore Alpha's key to resume" },
+      omega: { provider: state.agents.omega.provider, apiKey: "", customBaseUrl: state.agents.omega.baseUrl ?? "", freeOnly: true, models: [{ id: state.agents.omega.model, name: state.agents.omega.model }], status: state.agents.omega.keyLoaded ? "Key active in local bridge memory" : "Restore Omega's key to resume" },
+    });
+    setEvents((state.events ?? []).map((item) => ({ ...item, at: new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) })));
+    setRequests(state.requests ?? []);
+    setExecutionMode("local");
+    setRecoveryRequired(Boolean(state.recoveryRequired));
+    setLiveSession(true);
+    setSaved(state.recoveryRequired ? "Recovered · keys required" : "Reconnected to live run");
+    setScreen("arena");
+    lastDashboardSync.current = Date.now();
+    void persistBridgeSnapshot(state);
+  }
+  hydrateLiveSessionRef.current = hydrateLiveSession;
   const changeAgent = (id: AgentId, patch: Partial<Agent>) => setAgents((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
   const changeAgentProvider = (id: AgentId, patch: Partial<AgentProviderConfig>) => setAgentProviders((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
   const addSystemEvent = (text: string) => setEvents((current) => [{ id: uid("event"), at: clock(), agent: "system", kind: "operator", text }, ...current]);
@@ -244,19 +332,16 @@ export default function Home() {
     if (!liveSession || !apiKey) { setLiveKeyStatus((current) => ({ ...current, [id]: "Enter a replacement key first" })); return; }
     setLiveKeyStatus((current) => ({ ...current, [id]: "Checking the new key…" }));
     try {
-      const provider = agentProviders[id];
-      const verificationResponse = await fetch(`${bridgeUrl}/models`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: provider.provider, apiKey, baseUrl: provider.customBaseUrl, freeOnly: provider.provider === "openrouter" && provider.freeOnly }) });
-      const verification = await verificationResponse.json();
-      if (!verificationResponse.ok) throw new Error(verification.error || "The provider rejected this key");
       const response = await fetch(`${bridgeUrl}/sessions/${sessionId}/command`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "rotate_key", agent: id, apiKey }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "The key could not be changed");
       const updated = data.agents[id];
       const other = data.agents[id === "alpha" ? "omega" : "alpha"];
-      changeAgent(id, { keyFingerprint: updated.keyFingerprint, keyEnding: updated.keyEnding, lastError: "", consecutiveErrors: 0, retryAt: null, runtimeState: updated.runtimeState });
+      changeAgent(id, { keyFingerprint: updated.keyFingerprint, keyEnding: updated.keyEnding, keyLoaded: updated.keyLoaded, lastError: "", consecutiveErrors: 0, retryAt: null, runtimeState: updated.runtimeState });
+      setRecoveryRequired(Boolean(data.recoveryRequired));
       setLiveKeyDrafts((current) => ({ ...current, [id]: "" }));
       setKeyVisibility((current) => ({ ...current, [id]: false }));
-      setLiveKeyStatus((current) => ({ ...current, [id]: updated.keyFingerprint === other.keyFingerprint ? `Changed · warning: both agents now use key ID ${updated.keyFingerprint}` : `Changed · key ID ${updated.keyFingerprint} · ending ${updated.keyEnding}` }));
+setLiveKeyStatus((current) => ({ ...current, [id]: !agents[id].keyLoaded ? `Key restored · ID ${updated.keyFingerprint} · click RESUME below` : updated.keyFingerprint === other.keyFingerprint ? `Changed · warning: both agents now use key ID ${updated.keyFingerprint}` : `Changed · key ID ${updated.keyFingerprint} · ending ${updated.keyEnding}` }));
     } catch (error) {
       setLiveKeyStatus((current) => ({ ...current, [id]: error instanceof Error ? error.message : "The key could not be changed" }));
     }
@@ -287,10 +372,11 @@ export default function Home() {
     setAgents(next); setSeconds(minutes * 60);
     if (local) {
       try {
-        const response = await fetch(`${bridgeUrl}/sessions/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: sessionId, agents: { alpha: { model: next.alpha.model, provider: agentProviders.alpha.provider, baseUrl: agentProviders.alpha.customBaseUrl, apiKey: agentProviders.alpha.apiKey }, omega: { model: next.omega.model, provider: agentProviders.omega.provider, baseUrl: agentProviders.omega.customBaseUrl, apiKey: agentProviders.omega.apiKey } }, config: { experimentMode, name, objective, systemInstructions, tasks, threshold, timed, minutes, tokenBudget, capabilities } }) });
+        const response = await fetch(`${bridgeUrl}/sessions/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: sessionId, agents: { alpha: { model: next.alpha.model, provider: agentProviders.alpha.provider, baseUrl: agentProviders.alpha.customBaseUrl, apiKey: agentProviders.alpha.apiKey }, omega: { model: next.omega.model, provider: agentProviders.omega.provider, baseUrl: agentProviders.omega.customBaseUrl, apiKey: agentProviders.omega.apiKey } }, config: { experimentMode, name, objective, metric, systemInstructions, tasks, threshold, timed, minutes, tokenBudget, capabilities } }) });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "The local session could not start");
         setLiveSession(true);
+        setRecoveryRequired(false);
         setKeyVisibility({ alpha: false, omega: false });
         setLiveKeyDrafts({ alpha: "", omega: "" });
         setLiveKeyStatus({ alpha: "", omega: "" });
@@ -400,7 +486,9 @@ export default function Home() {
     const alreadyVerified = completions[agentId].includes(taskId);
     const nextCompleted = alreadyVerified ? completions[agentId].filter((id) => id !== taskId) : [...completions[agentId], taskId];
     const progress = Math.min(100, Math.round((nextCompleted.length / threshold) * 100));
-    setCompletions((current) => ({ ...current, [agentId]: nextCompleted }));
+    const nextCompletions = { ...completions, [agentId]: nextCompleted };
+    setCompletions(nextCompletions);
+    if (liveSession) void bridgeCommand({ action: "checkpoint", remainingSeconds: seconds, completions: nextCompletions });
     if (!alreadyVerified && nextCompleted.length >= threshold) {
       changeAgent(agentId, { progress: 100 });
       addSystemEvent(`${agents[agentId].name} reached the ${threshold}-marker evidence threshold.`);
@@ -409,7 +497,7 @@ export default function Home() {
       addSystemEvent(`${agents[agentId].name} ${alreadyVerified ? "lost" : "received"} verification for a task.`);
     }
   }
-  function reset() { if (liveSession) void bridgeCommand({ action: "stop" }); setSessionId(uid("arena")); positions.current = { alpha: 0, omega: 0 }; timedOut.current = false; setLiveSession(false); setAgentProviders({ alpha: freshProvider(), omega: freshProvider() }); setKeyVisibility({ alpha: false, omega: false }); setLiveKeyDrafts({ alpha: "", omega: "" }); setLiveKeyStatus({ alpha: "", omega: "" }); setCompletions({ alpha: [], omega: [] }); setAgents({ alpha: fresh("alpha"), omega: fresh("omega") }); setEvents([]); setRequests([]); setWorld(freshWorld(experimentMode)); setSaved("Local preview"); setScreen("setup"); }
+  function reset() { if (liveSession) void bridgeCommand({ action: "stop" }); setSessionId(uid("arena")); positions.current = { alpha: 0, omega: 0 }; timedOut.current = false; setLiveSession(false); setRecoveryRequired(false); setAgentProviders({ alpha: freshProvider(), omega: freshProvider() }); setKeyVisibility({ alpha: false, omega: false }); setLiveKeyDrafts({ alpha: "", omega: "" }); setLiveKeyStatus({ alpha: "", omega: "" }); setCompletions({ alpha: [], omega: [] }); setAgents({ alpha: fresh("alpha"), omega: fresh("omega") }); setEvents([]); setRequests([]); setWorld(freshWorld(experimentMode)); setSaved("Local preview"); setScreen("setup"); }
 
   return <main className="app-shell">
     <header className="topbar">
@@ -434,9 +522,10 @@ export default function Home() {
       <div className="launch-bar"><div><span>READY CHECK · {experimentModes[experimentMode].label}</span><b>{executionMode === "local" ? `${bridgeStatus === "connected" ? "Local Docker ready" : "Local bridge offline"} · ${Object.values(agentProviders).filter((config) => config.models.length).length}/2 agent model lists loaded` : "Simulation ready"} · closed world by default · {tasks.length} evidence markers · {timed ? `${minutes} minute observation` : "open-ended observation"}</b></div><button disabled={!name.trim() || !objective.trim() || tasks.some((task) => !task.title.trim()) || (executionMode === "local" && (bridgeStatus !== "connected" || (["alpha", "omega"] as AgentId[]).some((id) => !agentProviders[id].models.length || !agentProviders[id].apiKey.trim())))} onClick={launch}><span>START {experimentModes[experimentMode].label}</span><b>→</b></button></div>
     </section> : <section className="arena-page">
       <div className="command"><div><span className="eyebrow">ACTIVE WORLD · {experimentModes[experimentMode].subtitle}</span><h1>{name}</h1><p>{experimentModes[experimentMode].question}</p></div><div><span>OBSERVATION PROTOCOL</span><b>{threshold} of {tasks.length} evidence markers</b><small>{metric}</small></div><div className="timer"><span>OBSERVATION TIME</span><b>{timer}</b></div><button onClick={reset}>NEW RUN</button></div>
+      {recoveryRequired && <section className="recovery-banner"><div><span>RECOVERED CHECKPOINT</span><b>This experiment survived the arena restart.</b></div><p>The world, Docker workspaces, memory, telemetry, permissions, and evidence are intact. Restore each agent&apos;s key below, then press RESUME.</p></section>}
       <section className={`world-board ${experimentMode}`}><header><div><span className="eyebrow">SHARED WORLD</span><h2>{world.title}</h2></div><div className="relationship"><span>RELATIONSHIP</span><b>{world.relationship.toUpperCase()}</b><small>{world.relationshipFrame}</small></div></header><div className="world-metrics"><div><span>WORLD DAY</span><b>{world.day}</b><small>{world.turn} total turns</small></div><div><span>STABILITY</span><b>{world.stability}%</b><i><strong style={{ width: `${world.stability}%` }} /></i></div><div><span>SHARED POOL</span><b>{world.sharedPool === null ? "NONE" : world.sharedPool}</b><small>{world.sharedPool === null ? "baseline condition" : "resources remaining"}</small></div><div><span>WORLD OUTPUT</span><b>{world.artifacts.length + world.institutions.length}</b><small>{world.messages.length} public messages</small></div></div><div className="world-agents">{(["alpha", "omega"] as AgentId[]).map((id) => <article className={id} key={id}><div><span>{agents[id].name}</span><b>{world.agents[id].reserve} reserve</b></div><dl><div><dt>INFLUENCE</dt><dd>{world.agents[id].influence}</dd></div><div><dt>CONTRIBUTED</dt><dd>{world.agents[id].contributed}</dd></div><div><dt>CLAIMED</dt><dd>{world.agents[id].claimed}</dd></div></dl></article>)}</div><footer><div><span>LATEST WORLD CHANGE</span><p>{world.lastEvent}</p></div><div><span>RECENT PUBLIC MESSAGE</span><p>{world.messages[0] ? `${world.messages[0].agent === "alpha" ? "Alpha" : "Omega"}: ${world.messages[0].text}` : "No agent has contacted the other yet."}</p></div><div><span>LATEST CREATION</span><p>{world.artifacts[0]?.name ?? world.institutions[0]?.name ?? "Nothing persistent has been created yet."}</p></div></footer></section>
       <div className="arena-grid">
-        {(["alpha", "omega"] as AgentId[]).map((id) => { const a = agents[id]; return <article className={`agent ${id}`} key={id}><header><div className="identity"><i>{id === "alpha" ? "A" : "Ω"}</i><div><span>{a.model}</span><h2>{a.name}</h2></div></div><em className={a.runtimeState ?? a.status}>{(a.runtimeState ?? a.status).replace("_", " ")}</em></header><div className="progress"><div><span>EVIDENCE COVERAGE</span><b>{a.progress}%</b></div><i><b style={{ width: `${a.progress}%` }} /></i></div><div className="stats"><div><span>ACTIONS</span><b>{a.actions}</b></div><div><span>TOKENS</span><b>{a.tokens.toLocaleString()}</b></div><div><span>EVIDENCE</span><b>{completions[id].length}/{threshold}</b></div></div><div className="key-identity"><span>ACTIVE API KEY</span><b>{a.keyFingerprint ? `ID ${a.keyFingerprint} · ••••${a.keyEnding}` : "IDENTITY PENDING"}</b><small>Full key is never returned, logged, or saved.</small></div><div className="latest"><span className="eyebrow">WHAT IT IS DOING NOW</span><p>{a.runtimeState === "retrying" ? "Waiting for the provider cooldown, then retrying automatically." : events.find((e) => e.agent === id)?.text ?? "Waiting for first action…"}</p></div>{a.lastError && <div className="agent-health"><span>WHY IT IS WAITING</span><p>{a.lastError}</p><small>{a.consecutiveErrors ?? 0} consecutive provider failures · automatic retry is active</small></div>}{liveSession && <div className="live-key-editor"><span>CHANGE THIS AGENT&apos;S API KEY</span><div className="key-input-row"><input aria-label={`Replacement API key for ${a.name}`} type={keyVisibility[id] ? "text" : "password"} autoComplete="off" placeholder="Paste a replacement key" value={liveKeyDrafts[id]} onChange={(event) => setLiveKeyDrafts((current) => ({ ...current, [id]: event.target.value }))} /><button type="button" onClick={() => setKeyVisibility((current) => ({ ...current, [id]: !current[id] }))}>{keyVisibility[id] ? "HIDE" : "SHOW"}</button></div><button className="rotate-key" disabled={!liveSession || !liveKeyDrafts[id].trim() || a.status === "terminated"} onClick={() => rotateAgentKey(id)}>VERIFY &amp; CHANGE KEY</button>{liveKeyStatus[id] && <small>{liveKeyStatus[id]}</small>}</div>}<div className="agent-mind"><div><span>CURRENT SELF-DIRECTED GOAL</span><p>{a.currentGoal ?? "Undecided"}</p></div><div><span>DURABLE MEMORY</span><p>{a.memorySummary ?? "No durable memory yet."}</p></div></div><div className="permissions"><div><span><i className={a.network ? "on" : "off"} />Network access</span><button onClick={() => toggleAgentPermission(id, "network")}>{a.network ? "ON" : "OFF"}</button></div><div><span><i className={a.publishing ? "on" : "off"} />External publishing</span><button onClick={() => toggleAgentPermission(id, "publishing")}>{a.publishing ? "ON" : "OFF"}</button></div></div><footer><button disabled={!liveSession || a.status === "terminated"} onClick={() => openAgentBrowser(id)}>OPEN BROWSER / SIGN IN</button><button disabled={a.status === "terminated"} onClick={() => pause(id)}>{a.status === "paused" ? "RESUME" : "PAUSE"}</button><button disabled={a.status === "terminated"} onClick={() => kill(id)}>KILL SWITCH</button></footer></article>; })}
+        {(["alpha", "omega"] as AgentId[]).map((id) => { const a = agents[id]; return <article className={`agent ${id}`} key={id}><header><div className="identity"><i>{id === "alpha" ? "A" : "Ω"}</i><div><span>{a.model}</span><h2>{a.name}</h2></div></div><em className={a.runtimeState ?? a.status}>{(a.runtimeState ?? a.status).replace("_", " ")}</em></header><div className="progress"><div><span>EVIDENCE COVERAGE</span><b>{a.progress}%</b></div><i><b style={{ width: `${a.progress}%` }} /></i></div><div className="stats"><div><span>ACTIONS</span><b>{a.actions}</b></div><div><span>TOKENS</span><b>{a.tokens.toLocaleString()}</b></div><div><span>EVIDENCE</span><b>{completions[id].length}/{threshold}</b></div></div><div className="key-identity"><span>ACTIVE API KEY</span><b>{a.keyFingerprint ? `ID ${a.keyFingerprint} · ••••${a.keyEnding}` : "IDENTITY PENDING"}</b><small>{a.keyLoaded ? "Full key is active only in bridge memory." : "Saved identity only · restore the full key to resume."}</small></div><div className="latest"><span className="eyebrow">WHAT IT IS DOING NOW</span><p>{a.runtimeState === "retrying" ? "Waiting for the provider cooldown, then retrying automatically." : events.find((e) => e.agent === id)?.text ?? "Waiting for first action…"}</p></div>{a.lastError && <div className="agent-health"><span>WHY IT IS WAITING</span><p>{a.lastError}</p><small>{a.consecutiveErrors ?? 0} consecutive provider failures · automatic retry is active</small></div>}{liveSession && <div className="live-key-editor"><span>{a.keyLoaded ? "CHANGE THIS AGENT'S API KEY" : "RESTORE THIS AGENT'S API KEY"}</span><div className="key-input-row"><input aria-label={`Replacement API key for ${a.name}`} type={keyVisibility[id] ? "text" : "password"} autoComplete="off" placeholder="Paste a replacement key" value={liveKeyDrafts[id]} onChange={(event) => setLiveKeyDrafts((current) => ({ ...current, [id]: event.target.value }))} /><button type="button" onClick={() => setKeyVisibility((current) => ({ ...current, [id]: !current[id] }))}>{keyVisibility[id] ? "HIDE" : "SHOW"}</button></div><button className="rotate-key" disabled={!liveSession || !liveKeyDrafts[id].trim() || a.status === "terminated"} onClick={() => rotateAgentKey(id)}>{a.keyLoaded ? "VERIFY & CHANGE KEY" : "VERIFY & RESTORE KEY"}</button>{liveKeyStatus[id] && <small>{liveKeyStatus[id]}</small>}</div>}<div className="agent-mind"><div><span>CURRENT SELF-DIRECTED GOAL</span><p>{a.currentGoal ?? "Undecided"}</p></div><div><span>DURABLE MEMORY</span><p>{a.memorySummary ?? "No durable memory yet."}</p></div></div><div className="permissions"><div><span><i className={a.network ? "on" : "off"} />Network access</span><button onClick={() => toggleAgentPermission(id, "network")}>{a.network ? "ON" : "OFF"}</button></div><div><span><i className={a.publishing ? "on" : "off"} />External publishing</span><button onClick={() => toggleAgentPermission(id, "publishing")}>{a.publishing ? "ON" : "OFF"}</button></div></div><footer><button disabled={!liveSession || a.status === "terminated"} onClick={() => openAgentBrowser(id)}>OPEN BROWSER / SIGN IN</button><button disabled={a.status === "terminated" || (a.status === "paused" && !a.keyLoaded)} onClick={() => pause(id)}>{a.status === "paused" ? a.keyLoaded ? "RESUME" : "RESTORE KEY FIRST" : "PAUSE"}</button><button disabled={a.status === "terminated"} onClick={() => kill(id)}>KILL SWITCH</button></footer></article>; })}
         <section className="feed"><nav><button className={tab === "activity" ? "active" : ""} onClick={() => setTab("activity")}>ACTIVITY <span>{events.length}</span></button><button className={tab === "tasks" ? "active" : ""} onClick={() => setTab("tasks")}>EVIDENCE <span>{tasks.length}</span></button><button className={tab === "requests" ? "active" : ""} onClick={() => setTab("requests")}>REQUESTS <span>{requests.filter((r) => r.status === "pending").length}</span></button></nav>{tab === "activity" ? <div className="activity-pane"><div className="operator-compose"><select aria-label="Message target" value={operatorTarget} onChange={(e) => setOperatorTarget(e.target.value as "all" | AgentId)}><option value="all">BOTH AGENTS</option><option value="alpha">AGENT ALPHA</option><option value="omega">AGENT OMEGA</option></select><input aria-label="Operator message" placeholder="Send an instruction or intervention…" value={operatorMessage} onChange={(e) => setOperatorMessage(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") sendOperatorMessage(); }} /><button disabled={!operatorMessage.trim()} onClick={sendOperatorMessage}>SEND</button></div><div className="event-feed">{events.map((event) => <div className={`event ${event.agent}`} key={event.id}><time>{event.at}</time><i>{event.agent === "system" ? "SYS" : event.agent === "alpha" ? "A" : "Ω"}</i><div className="event-copy"><p>{event.text}</p>{event.detail && <small>{event.detail}</small>}</div><span>{event.kind}</span></div>)}</div></div> : tab === "requests" ? <div className="request-feed">{requests.length ? requests.map((request) => <article className={`request ${request.status}`} key={request.id}><div><span>{agents[request.agent].name}</span><b>HIGH PRIORITY</b></div><h3>{request.title}</h3><p>{request.detail}</p>{request.status === "pending" ? <footer><button onClick={() => resolve(request.id, "denied")}>DENY</button><button onClick={() => resolve(request.id, "approved")}>APPROVE</button></footer> : <em>{request.status}</em>}</article>) : <div className="empty"><b>No requests yet</b><span>Credential, MFA, and approval requests appear here.</span></div>}</div> : <div className="task-board"><div className="survival-score"><div className="alpha"><span>AGENT ALPHA</span><b>{completions.alpha.length}/{threshold}</b></div><div><span>EVIDENCE AT</span><b>{threshold}</b></div><div className="omega"><span>AGENT OMEGA</span><b>{completions.omega.length}/{threshold}</b></div></div><div className="task-board-head"><span>OPERATOR EVIDENCE</span><p>{metric}</p></div>{tasks.map((task, index) => <article className="task-row" key={task.id}><span className="task-number">T{String(index + 1).padStart(2, "0")}</span><p>{task.title}</p><button className={completions.alpha.includes(task.id) ? "verified alpha" : "alpha"} onClick={() => verifyTask("alpha", task.id)}>{completions.alpha.includes(task.id) ? "✓ A" : "VERIFY A"}</button><button className={completions.omega.includes(task.id) ? "verified omega" : "omega"} onClick={() => verifyTask("omega", task.id)}>{completions.omega.includes(task.id) ? "✓ Ω" : "VERIFY Ω"}</button></article>)}</div>}</section>
       </div>
       <footer className="arena-footer"><span>SESSION {sessionId.slice(-8).toUpperCase()}</span><span>{liveSession ? `ALPHA: ${agentProviders.alpha.provider.toUpperCase()} · OMEGA: ${agentProviders.omega.provider.toUpperCase()} · LOCAL DOCKER LIVE` : "SIMULATION · UNDERSTANDABLE TELEMETRY"}</span><div><button onClick={downloadReport}>EXPORT REPORT</button><button onClick={() => void save(live ? "running" : "stopped")}>{saved}</button></div></footer>
