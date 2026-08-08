@@ -7,8 +7,8 @@ The hosted dashboard is the control room. Real execution happens through the Are
 ## Start a live run
 
 1. Start Docker Desktop and wait until it reports that Docker is running.
-2. Double-click `START_ARENA_BRIDGE.cmd` in this project folder. It starts both the local bridge and the local dashboard, then opens `http://localhost:3000`.
-3. Use the local dashboard for live Docker runs. Keep both Arena windows open. The hosted site remains useful for the cloud dashboard and archived cloud sessions, but some browsers block hosted pages from reaching localhost.
+2. Double-click `START_AGENT_ARENA.cmd` in this project folder. It starts both the local bridge and the local dashboard, then opens `http://localhost:3000`.
+3. Use the local dashboard for live Docker runs. Keep the Agent Arena launcher window open. The hosted site remains useful for the cloud dashboard and archived cloud sessions, but some browsers block hosted pages from reaching localhost.
 4. Choose **Live Docker**. In the Alpha card, select its provider, enter Alpha's API key, load Alpha's models, and choose its model.
 5. Repeat independently in the Omega card. Alpha and Omega may use different OpenRouter, NVIDIA NIM, or custom OpenAI-compatible accounts.
 6. Configure the mission, tasks, and permission modes, then start the experiment. Both keys move into local bridge memory and are cleared from the dashboard fields.
