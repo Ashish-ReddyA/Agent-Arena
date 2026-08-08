@@ -41,11 +41,17 @@ test("ships the Agent Arena product surface", async () => {
   assert.match(page, /COOPERATION/);
   assert.match(page, /SHARED WORLD/);
   assert.match(page, /DURABLE MEMORY/);
+  assert.match(page, /WHY IT IS WAITING/);
+  assert.match(page, /runtimeState/);
   assert.match(page, /experimentMode/);
   assert.match(bridge, /createWorld/);
   assert.match(bridge, /executeWorldAction/);
   assert.match(bridge, /syncMemory/);
   assert.match(bridge, /relationshipScore/);
+  assert.match(bridge, /describeAgentFailure/);
+  assert.match(bridge, /useModelLane/);
+  assert.match(bridge, /action\.operation \|\| action\.action/);
+  assert.match(bridge, /retryAt > Date\.now/);
   assert.match(bridge, /apiKey: body\.agents\.alpha\.apiKey/);
   assert.match(bridge, /apiKey: body\.agents\.omega\.apiKey/);
   assert.doesNotMatch(bridge, /session\.apiKey/);

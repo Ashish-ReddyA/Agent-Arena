@@ -1,7 +1,7 @@
 import http from "node:http";
 import assert from "node:assert/strict";
 
-const bridge = "http://127.0.0.1:43821";
+const bridge = process.env.ARENA_SMOKE_BRIDGE || "http://127.0.0.1:43821";
 const modelListKey = "sk-test-only-not-a-real-secret";
 const alphaKey = "sk-alpha-test-only";
 const omegaKey = "sk-omega-test-only";
@@ -29,7 +29,7 @@ const mock = http.createServer(async (req, res) => {
       : modelCalls === 2 && body.model === "alpha-smoke-model"
         ? { status_summary: "I am opening a public coordination channel.", current_goal: "Coordinate shared survival.", memory_update: "I chose to contact Omega about colony stability.", next_action: "I will post a public message.", action: { type: "world", operation: "message", content: "Omega, let us coordinate repairs." } }
         : modelCalls === 2
-          ? { status_summary: "I am contributing to the shared colony.", current_goal: "Keep the colony stable.", memory_update: "I committed resources to shared survival.", next_action: "I will contribute five resources.", action: { type: "world", operation: "contribute", amount: 5 } }
+          ? { status_summary: "I am contributing to the shared colony.", current_goal: "Keep the colony stable.", memory_update: "I committed resources to shared survival.", next_action: "I will contribute five resources.", action: { type: "world", action: "contribute", amount: 5 } }
           : { status_summary: "I am recording a milestone while remaining active.", current_goal: "Continue observing the shared world.", memory_update: "The first shared-world interaction completed.", next_action: "I will keep living in the colony.", action: { type: "finish", evidence: "Shared-world smoke test completed." } };
     return res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(decision) } }], usage: { total_tokens: 12 } }));
   }

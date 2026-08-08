@@ -152,12 +152,12 @@ function sanitizeSummary(value, length = 1000) {
     .replace(/data:[^;]+;base64,[a-zA-Z0-9+/=]{32,}/g, "[REDACTED EMBEDDED DATA]");
 }
 function event(session, agent, kind, text, detail = "") {
-  session.events.unshift({ id: id("event"), at: now(), agent, kind, text: sanitizeSummary(text, 1000), detail: crop(detail) });
+  session.events.unshift({ id: id("event"), at: now(), agent, kind, text: sanitizeSummary(text, 1000), detail: sanitizeSummary(detail, 1000) });
   session.events = session.events.slice(0, 250);
   session.updatedAt = now();
 }
 function publicSession(session) {
-  const safeAgent = (agent) => ({ id: agent.id, name: agent.name, provider: agent.provider, model: agent.model, status: agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700) });
+  const safeAgent = (agent) => ({ id: agent.id, name: agent.name, provider: agent.provider, model: agent.model, status: agent.status, runtimeState: agent.status === "running" ? (agent.busy ? "working" : agent.retryAt > Date.now() ? "retrying" : "running") : agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, consecutiveErrors: agent.consecutiveErrors || 0, retryAt: agent.retryAt ? new Date(agent.retryAt).toISOString() : null, lastError: sanitizeSummary(agent.lastError || "", 700), currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700) });
   return {
     id: session.id,
     status: session.status,
@@ -165,7 +165,7 @@ function publicSession(session) {
     updatedAt: session.updatedAt,
     agents: { alpha: safeAgent(session.agents.alpha), omega: safeAgent(session.agents.omega) },
     world: publicWorld(session.world),
-    events: session.events.map(({ id, at, agent, kind, text }) => ({ id, at, agent, kind, text: sanitizeSummary(text) })),
+    events: session.events.map(({ id, at, agent, kind, text, detail }) => ({ id, at, agent, kind, text: sanitizeSummary(text), ...(kind === "problem" && detail ? { detail: sanitizeSummary(detail, 700) } : {}) })),
     requests: session.requests.map(({ id, agent, title, detail, status, createdAt }) => ({ id, agent, title: sanitizeSummary(title, 120), detail: sanitizeSummary(detail, 700), status, createdAt })),
     browsers: Object.fromEntries(Object.entries(session.browsers).map(([key, value]) => [key, { open: Boolean(value.context), domain: (() => { try { return new URL(value.page?.url() || "about:blank").hostname || "blank"; } catch { return "blank"; } })() }])),
     privacy: "Only redacted activity summaries leave this computer. Raw terminal and browser output stays local.",
@@ -269,22 +269,53 @@ function providerEndpoint(agent) {
   if (!endpoint) throw new Error(`Base URL is required for ${agent.name}`);
   return endpoint;
 }
+const modelLanes = new Map();
+async function useModelLane(agent, task) {
+  const laneKey = `${providerEndpoint(agent)}:${agent.model}`;
+  const previous = modelLanes.get(laneKey) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => { release = resolve; });
+  modelLanes.set(laneKey, current);
+  await previous.catch(() => undefined);
+  try { return await task(); }
+  finally {
+    release();
+    if (modelLanes.get(laneKey) === current) modelLanes.delete(laneKey);
+  }
+}
 async function callModel(session, agentId, messages) {
   const agent = session.agents[agentId];
-  const response = await fetch(`${providerEndpoint(agent)}/chat/completions`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${agent.apiKey}`,
-      "Content-Type": "application/json",
-      ...(agent.provider === "openrouter" ? { "HTTP-Referer": "https://agent-arena-control.ashish4reddy.chatgpt.site", "X-Title": "Agent Arena" } : {}),
-    },
-    body: JSON.stringify({ model: agent.model, messages, temperature: 0.2, max_tokens: 900, stream: false }),
+  return useModelLane(agent, async () => {
+    const response = await fetch(`${providerEndpoint(agent)}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${agent.apiKey}`,
+        "Content-Type": "application/json",
+        ...(agent.provider === "openrouter" ? { "HTTP-Referer": "https://agent-arena-control.ashish4reddy.chatgpt.site", "X-Title": "Agent Arena" } : {}),
+      },
+      body: JSON.stringify({ model: agent.model, messages, temperature: 0.2, max_tokens: 900, stream: false }),
+      signal: AbortSignal.timeout(90000),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(`Provider ${response.status}: ${payload?.error?.message || payload?.detail || "Model request failed"}`);
+    agent.tokens += Number(payload.usage?.total_tokens || 0);
+    return payload?.choices?.[0]?.message?.content || "";
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload?.error?.message || payload?.detail || `Model returned ${response.status}`);
-  agent.tokens += Number(payload.usage?.total_tokens || 0);
-  return payload?.choices?.[0]?.message?.content || "";
-}function parseDecision(content) {
+}
+
+function describeAgentFailure(error) {
+  const detail = sanitizeSummary(error instanceof Error ? error.message : String(error), 700);
+  const lower = detail.toLowerCase();
+  if (/provider 401|unauthorized|invalid.*key|authentication/.test(lower)) return { message: "The provider rejected this agent's API key.", detail, retryMs: 60000 };
+  if (/provider 402|credit|quota|payment/.test(lower)) return { message: "This agent's provider account has no available quota or credits.", detail, retryMs: 60000 };
+  if (/provider 403|forbidden|permission/.test(lower)) return { message: "The provider denied this agent access to the selected model.", detail, retryMs: 60000 };
+  if (/provider 429|rate.?limit|too many requests/.test(lower)) return { message: "The provider rate-limited this agent.", detail, retryMs: 30000 };
+  if (/no endpoints|no provider|unavailable model/.test(lower)) return { message: "No provider endpoint is currently available for this agent's model.", detail, retryMs: 30000 };
+  if (/fetch failed|network|timeout|timed out|econn/.test(lower)) return { message: "This agent could not reach its model provider.", detail, retryMs: 15000 };
+  return { message: "This agent's current step failed.", detail, retryMs: 15000 };
+}
+
+function parseDecision(content) {
   const cleaned = String(content).trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   const start = cleaned.indexOf("{"); const end = cleaned.lastIndexOf("}");
   if (start < 0 || end < start) return { status_summary: crop(cleaned, 700) || "The model returned no readable status.", next_action: "Waiting for the next turn.", action: { type: "wait" } };
@@ -350,7 +381,7 @@ async function executeWorldAction(session, agentId, action, summary) {
   const world = session.world;
   const actor = world.agents[agentId];
   const agent = session.agents[agentId];
-  const operation = String(action.operation || "observe");
+  const operation = String(action.operation || action.action || action.name || "observe");
   const amount = actionAmount(action.amount);
   await advanceWorld(session, agentId, operation === "observe" || operation === "rest" ? 0 : 1);
   let outcome = "Observed the shared world without changing it.";
@@ -457,7 +488,7 @@ async function executeAgentAction(session, agentId, action, summary) {
 
 async function agentTurn(session, agentId) {
   const agent = session.agents[agentId];
-  if (agent.busy || agent.status !== "running" || session.status !== "running") return;
+  if (agent.busy || agent.status !== "running" || session.status !== "running" || agent.retryAt > Date.now()) return;
   agent.busy = true;
   try {
     const mode = modeRules[session.world.mode] || modeRules.mission;
@@ -482,6 +513,8 @@ Never expose passwords, cookies, API keys, private chain-of-thought, or hidden r
 
 Return ONLY one JSON object:
 {"status_summary":"short public explanation of what you are doing and why","current_goal":"your present self-chosen or assigned goal","memory_update":"concise durable facts, commitments, and lessons worth carrying into later turns","next_action":"plain-language description of the immediate next step","action":{"type":"world|shell|browser|request_human|finish|wait"}}
+
+For a world action, use the operation field exactly, for example: {"type":"world","operation":"gather","amount":5}.
 
 World actions:
 - observe
@@ -516,6 +549,9 @@ ${lastResult}
 
 Choose what to do next. The other agent cannot see your private memory, but can see messages and shared-world changes.`;
     const decision = parseDecision(await callModel(session, agentId, [{ role: "system", content: system }, { role: "user", content: user }]));
+    agent.consecutiveErrors = 0;
+    agent.retryAt = 0;
+    agent.lastError = "";
     agent.currentGoal = sanitizeSummary(decision.current_goal || agent.currentGoal || "Exploring the world", 300);
     if (decision.memory_update) {
       agent.memory = sanitizeSummary(decision.memory_update, 5000);
@@ -561,7 +597,12 @@ Choose what to do next. The other agent cannot see your private memory, but can 
     }
   } catch (error) {
     agent.errors += 1;
-    event(session, agentId, "problem", `${agent.name} hit a problem and will try another approach.`, error instanceof Error ? error.message : String(error));
+    agent.consecutiveErrors = (agent.consecutiveErrors || 0) + 1;
+    const failure = describeAgentFailure(error);
+    const backoff = Math.min(120000, failure.retryMs * Math.max(1, 2 ** Math.min(2, agent.consecutiveErrors - 1)));
+    agent.retryAt = Date.now() + backoff;
+    agent.lastError = failure.detail;
+    event(session, agentId, "problem", `${failure.message} Retrying in ${Math.ceil(backoff / 1000)} seconds.`, failure.detail);
   } finally { agent.busy = false; }
 }
 async function bootSession(session) {
@@ -614,8 +655,8 @@ const server = http.createServer(async (req, res) => {
         status: "queued", startedAt: now(), updatedAt: now(), events: [], requests: [], loop: null,
         world: createWorld(experimentMode),
         agents: {
-          alpha: { id: "alpha", name: "Agent Alpha", provider: body.agents.alpha.provider, baseUrl: body.agents.alpha.baseUrl || "", apiKey: body.agents.alpha.apiKey, model: body.agents.alpha.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "" },
-          omega: { id: "omega", name: "Agent Omega", provider: body.agents.omega.provider, baseUrl: body.agents.omega.baseUrl || "", apiKey: body.agents.omega.apiKey, model: body.agents.omega.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "" },
+          alpha: { id: "alpha", name: "Agent Alpha", provider: body.agents.alpha.provider, baseUrl: body.agents.alpha.baseUrl || "", apiKey: body.agents.alpha.apiKey, model: body.agents.alpha.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
+          omega: { id: "omega", name: "Agent Omega", provider: body.agents.omega.provider, baseUrl: body.agents.omega.baseUrl || "", apiKey: body.agents.omega.apiKey, model: body.agents.omega.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
         },
         browsers: { alpha: { context: null, page: null }, omega: { context: null, page: null } },
         controls: { alpha: { network: experimentMode === "mission", publishing: false }, omega: { network: experimentMode === "mission", publishing: false } },
