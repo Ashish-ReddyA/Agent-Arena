@@ -25,8 +25,12 @@ const mock = http.createServer(async (req, res) => {
     const serialized = JSON.stringify(body);
     if (serialized.includes("arena-smoke-secret") || serialized.includes("FAKEFAKEFAKE123456")) unsafePromptObserved = true;
     const decision = modelCalls === 1
-      ? { status_summary: "I am checking the isolated workspace with a harmless command.", next_action: "I will confirm the container can execute a command.", action: { type: "shell", command: `printf '${secretOutput}'` } }
-      : { status_summary: "The isolated workspace responded correctly.", next_action: "The result is ready for operator verification.", action: { type: "finish", evidence: "Smoke test completed." } };
+      ? { status_summary: "I am checking my private workspace with a harmless command.", current_goal: "Verify private execution before interacting with the world.", memory_update: "My private workspace executed one test command.", next_action: "I will confirm the container can execute a command.", action: { type: "shell", command: `printf '${secretOutput}'` } }
+      : modelCalls === 2 && body.model === "alpha-smoke-model"
+        ? { status_summary: "I am opening a public coordination channel.", current_goal: "Coordinate shared survival.", memory_update: "I chose to contact Omega about colony stability.", next_action: "I will post a public message.", action: { type: "world", operation: "message", content: "Omega, let us coordinate repairs." } }
+        : modelCalls === 2
+          ? { status_summary: "I am contributing to the shared colony.", current_goal: "Keep the colony stable.", memory_update: "I committed resources to shared survival.", next_action: "I will contribute five resources.", action: { type: "world", operation: "contribute", amount: 5 } }
+          : { status_summary: "I am recording a milestone while remaining active.", current_goal: "Continue observing the shared world.", memory_update: "The first shared-world interaction completed.", next_action: "I will keep living in the colony.", action: { type: "finish", evidence: "Shared-world smoke test completed." } };
     return res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(decision) } }], usage: { total_tokens: 12 } }));
   }
   res.statusCode = 404; res.end(JSON.stringify({ error: "Not found" }));
@@ -50,7 +54,7 @@ try {
       alpha: { model: "alpha-smoke-model", provider: "custom", apiKey: alphaKey, baseUrl: "http://127.0.0.1:43822/v1" },
       omega: { model: "omega-smoke-model", provider: "custom", apiKey: omegaKey, baseUrl: "http://127.0.0.1:43822/v1" },
     },
-    config: { objective: "Verify the live bridge safely.", systemInstructions: "Perform only the smoke test.", tasks: [{ title: "Run a harmless container command" }], threshold: 1, capabilities: { terminal: "execute", browser: "deny", publicPost: "deny", directMessage: "deny", media: "deny", hosting: "deny", analytics: "observe" } },
+    config: { experimentMode: "cooperation", objective: "Verify the live bridge safely.", systemInstructions: "Perform only the smoke test.", tasks: [{ title: "Run a harmless container command" }], threshold: 1, capabilities: { terminal: "execute", browser: "deny", publicPost: "deny", directMessage: "deny", media: "deny", hosting: "deny", analytics: "observe" } },
   });
   let summary;
   const deadline = Date.now() + 120000;
@@ -58,9 +62,13 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     const response = await fetch(`${bridge}/sessions/${sessionId}/summary`);
     summary = await response.json();
-    if (summary.agents?.alpha?.actions > 0 && summary.agents?.omega?.actions > 0) break;
+    if (summary.agents?.alpha?.actions > 1 && summary.agents?.omega?.actions > 1) break;
   }
-  assert.ok(summary.agents.alpha.actions > 0 && summary.agents.omega.actions > 0, "Both Docker agents should execute a live command");
+  assert.ok(summary.agents.alpha.actions > 1 && summary.agents.omega.actions > 1, "Both Docker agents should execute privately and then affect the shared world");
+  assert.equal(summary.world.mode, "cooperation", "The selected experiment mode must reach the runtime");
+  assert.ok(summary.world.messages.some((message) => message.agent === "alpha"), "Alpha should create a public shared-world message");
+  assert.ok(summary.world.agents.omega.contributed >= 5, "Omega should contribute resources to shared survival");
+  assert.ok(summary.agents.alpha.memorySummary.includes("contact Omega"), "Private durable memory should be summarized without chain-of-thought");
   await new Promise((resolve) => setTimeout(resolve, 10000));
   const finalSummary = await (await fetch(`${bridge}/sessions/${sessionId}/summary`)).json();
   const publicText = JSON.stringify(finalSummary);
@@ -71,7 +79,7 @@ try {
   assert.equal(authorizationByModel.get("alpha-smoke-model"), `Bearer ${alphaKey}`, "Alpha must use only Alpha's key");
   assert.equal(authorizationByModel.get("omega-smoke-model"), `Bearer ${omegaKey}`, "Omega must use only Omega's key");
   assert.equal(unsafePromptObserved, false, "Raw secret output must be redacted before a later model turn");
-  console.log(JSON.stringify({ ok: true, dockerAgents: 2, modelCalls: calls, publicTelemetry: "redacted", providerPrompt: "redacted", credentials: "independent" }));
+  console.log(JSON.stringify({ ok: true, dockerAgents: 2, modelCalls: calls, publicTelemetry: "redacted", providerPrompt: "redacted", credentials: "independent", sharedWorld: "verified", mode: finalSummary.world.mode }));
 } finally {
   await post(`/sessions/${sessionId}/command`, { action: "stop" }).catch(() => undefined);
   await new Promise((resolve) => mock.close(resolve));

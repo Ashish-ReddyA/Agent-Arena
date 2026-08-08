@@ -12,13 +12,13 @@ test("ships the Agent Arena product surface", async () => {
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
     readFile(new URL("../local-bridge/server.mjs", import.meta.url), "utf8"),
   ]);
-  assert.match(page, /Stage the arena/);
-  assert.match(page, /START EXPERIMENT/);
+  assert.match(page, /Choose the world/);
+  assert.match(page, /START \{experimentModes/);
   assert.match(page, /KILL SWITCH/);
   assert.match(page, /REQUESTS/);
-  assert.match(page, /SURVIVAL THRESHOLD/);
+  assert.match(page, /EVIDENCE THRESHOLD/);
   assert.match(page, /verifyTask/);
-  assert.match(page, /Countdown expired/);
+  assert.match(page, /observation window expired/);
   assert.match(page, /SYSTEM INSTRUCTIONS/);
   assert.match(page, /OBSERVE/);
   assert.match(page, /EXECUTE/);
@@ -35,6 +35,17 @@ test("ships the Agent Arena product surface", async () => {
   assert.match(page, /Independent agent credentials/);
   assert.match(page, /agentProviders\.alpha/);
   assert.match(page, /agentProviders\.omega/);
+  assert.match(page, /EMPTY WORLD/);
+  assert.match(page, /COLONY ZERO/);
+  assert.match(page, /RIVALRY/);
+  assert.match(page, /COOPERATION/);
+  assert.match(page, /SHARED WORLD/);
+  assert.match(page, /DURABLE MEMORY/);
+  assert.match(page, /experimentMode/);
+  assert.match(bridge, /createWorld/);
+  assert.match(bridge, /executeWorldAction/);
+  assert.match(bridge, /syncMemory/);
+  assert.match(bridge, /relationshipScore/);
   assert.match(bridge, /apiKey: body\.agents\.alpha\.apiKey/);
   assert.match(bridge, /apiKey: body\.agents\.omega\.apiKey/);
   assert.doesNotMatch(bridge, /session\.apiKey/);

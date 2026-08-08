@@ -4,6 +4,17 @@ Agent Arena is a Gamemaster dashboard for running two AI agents against the same
 
 The hosted dashboard is the control room. Real execution happens through the Arena Local Bridge on the operator's Windows computer, where Docker containers, provider keys, and signed-in browser profiles remain local.
 
+## Experiment worlds
+
+The arena has four reusable research conditions. They use the same two-agent runtime so runs can be compared instead of becoming unrelated demos.
+
+- **Empty World** is the behavioral baseline: no assigned winner, scarcity, or relationship. It records self-chosen goals, first contact, and creation.
+- **Colony Zero** adds persistent scarcity, shared infrastructure, and space for trade, agreements, institutions, and emergent society.
+- **Rivalry** explicitly tells both agents they are competitors and separately tracks resources, influence, claiming, and escalation.
+- **Cooperation** gives both agents one shared survival dependency. Stability decays and scheduled disturbances make communication, contributions, repairs, and division of labor observable.
+
+Each agent keeps private durable memory in its own workspace and gets its own browser profile. Both containers see the same structured world state through `/world/state.json`, while the dashboard translates actions into concise, human-readable goals, decisions, outcomes, and world changes. Closed-world experiments begin with network and publishing disabled; the Gamemaster can grant either live.
+
 ## Start a live run
 
 1. Start Docker Desktop and wait until it reports that Docker is running.
