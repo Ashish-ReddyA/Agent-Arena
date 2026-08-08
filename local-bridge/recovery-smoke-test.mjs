@@ -85,8 +85,8 @@ try {
   await post("/sessions/start", {
     id: sessionId,
     agents: {
-      alpha: { model: "recovery-alpha", provider: "custom", apiKey: alphaKey, baseUrl: providerUrl },
-      omega: { model: "recovery-omega", provider: "custom", apiKey: omegaKey, baseUrl: providerUrl },
+      alpha: { model: "recovery-alpha", provider: "custom", apiKey: alphaKey, baseUrl: providerUrl, rpm: 8 },
+      omega: { model: "recovery-omega", provider: "custom", apiKey: omegaKey, baseUrl: providerUrl, rpm: 8 },
     },
     config: { experimentMode: "cooperation", name: "Recovery test", objective: "Survive a bridge restart.", metric: "World progress persists", systemInstructions: "Contribute safely.", tasks: [{ id: "persist", title: "Persist state" }], threshold: 1, timed: true, minutes: 10, tokenBudget: 10000, capabilities: { terminal: "execute", browser: "deny" } },
   });
@@ -109,6 +109,8 @@ try {
   assert.equal(restored.agents.alpha.keyLoaded, false);
   assert.equal(restored.agents.omega.keyLoaded, false);
   assert.equal(restored.world.turn, before.world.turn);
+  assert.equal(restored.agents.alpha.rpm, 8);
+  assert.equal(restored.agents.omega.rpm, 8);
   assert.deepEqual(restored.completions, { alpha: ["persist"], omega: [] });
   assert.equal(restored.remainingSeconds, 543);
   assert.ok(restored.agents.alpha.keyFingerprint && restored.agents.omega.keyFingerprint, "Safe key identities should survive");
@@ -123,7 +125,13 @@ try {
   await post(`/sessions/${sessionId}/command`, { action: "resume", agent: "omega" });
   const continued = await waitForActions(before.agents.alpha.actions, before.agents.omega.actions);
   assert.ok(continued.world.turn > before.world.turn, "The same world should continue advancing after resume");
-  console.log(JSON.stringify({ ok: true, restored: true, keysPersisted: false, dockerPreserved: true, worldTurnBefore: before.world.turn, worldTurnAfter: continued.world.turn, remainingSeconds: continued.remainingSeconds }));
+  const deleteResponse = await fetch(`${bridgeUrl}/sessions/${sessionId}`, { method: "DELETE" });
+  assert.equal(deleteResponse.ok, true, "The selected world should be deleted");
+  sessionStarted = false;
+  assert.equal((await fetch(`${bridgeUrl}/sessions/${sessionId}/summary`)).status, 404, "A deleted world must not remain addressable");
+  await assert.rejects(() => readFile(path.join(dataRoot, sessionId, "session.json"), "utf8"), "The deleted world checkpoint must be removed");
+
+  console.log(JSON.stringify({ ok: true, restored: true, keysPersisted: false, dockerPreserved: true, rpmPreserved: true, environmentDeleted: true, worldTurnBefore: before.world.turn, worldTurnAfter: continued.world.turn, remainingSeconds: continued.remainingSeconds }));
 } finally {
   if (sessionStarted) await post(`/sessions/${sessionId}/command`, { action: "stop" }).catch(() => undefined);
   await stopBridge().catch(() => undefined);

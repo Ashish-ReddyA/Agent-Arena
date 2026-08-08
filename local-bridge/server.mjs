@@ -1,7 +1,7 @@
 import http from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
@@ -156,6 +156,10 @@ function keyIdentity(value) {
   if (!key) return { keyFingerprint: "", keyEnding: "" };
   return { keyFingerprint: crypto.createHash("sha256").update(key).digest("hex").slice(0, 10).toUpperCase(), keyEnding: key.slice(-4).replace(/[^a-zA-Z0-9]/g, "•") };
 }
+function normalizeRpm(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.min(600, Math.max(1, Math.floor(parsed))) : 10;
+}
 const snapshotWrites = new Map();
 function snapshotAgent(agent) {
   const saved = { ...agent, apiKey: "", busy: false, lastResult: sanitizeSummary(agent.lastResult || "", 5000), memory: sanitizeSummary(agent.memory || "", 5000) };
@@ -209,6 +213,9 @@ async function restoreSessions() {
         agent.apiKey = "";
         agent.busy = false;
         agent.retryAt = 0;
+        agent.rateLimitUntil = 0;
+        agent.rpm = normalizeRpm(agent.rpm);
+        agent.requestTimestamps = [];
         if (["queued", "starting", "running", "retrying", "working"].includes(agent.status)) agent.status = "paused";
       }
       if (session.recoveryRequired) session.status = "paused";
@@ -226,7 +233,7 @@ function event(session, agent, kind, text, detail = "") {
   void scheduleSnapshot(session);
 }
 function publicSession(session) {
-  const safeAgent = (agent) => { const identity = agent.apiKey ? keyIdentity(agent.apiKey) : { keyFingerprint: agent.keyFingerprint || "", keyEnding: agent.keyEnding || "" }; return { id: agent.id, name: agent.name, provider: agent.provider, baseUrl: agent.baseUrl || "", model: agent.model, ...identity, keyLoaded: Boolean(agent.apiKey), status: agent.status, runtimeState: agent.status === "running" ? (agent.busy ? "working" : agent.retryAt > Date.now() ? "retrying" : "running") : agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, consecutiveErrors: agent.consecutiveErrors || 0, retryAt: agent.retryAt ? new Date(agent.retryAt).toISOString() : null, lastError: sanitizeSummary(agent.lastError || "", 700), currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700) }; };
+  const safeAgent = (agent) => { const identity = agent.apiKey ? keyIdentity(agent.apiKey) : { keyFingerprint: agent.keyFingerprint || "", keyEnding: agent.keyEnding || "" }; return { id: agent.id, name: agent.name, provider: agent.provider, baseUrl: agent.baseUrl || "", model: agent.model, rpm: normalizeRpm(agent.rpm), ...identity, keyLoaded: Boolean(agent.apiKey), status: agent.status, runtimeState: agent.status === "running" ? (agent.rateLimitUntil > Date.now() ? "rate_limited" : agent.busy ? "working" : agent.retryAt > Date.now() ? "retrying" : "running") : agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, consecutiveErrors: agent.consecutiveErrors || 0, retryAt: agent.retryAt ? new Date(agent.retryAt).toISOString() : null, lastError: sanitizeSummary(agent.lastError || "", 700), currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700) }; };
   return {
     id: session.id,
     status: session.status,
@@ -250,7 +257,7 @@ function headersFor(origin) {
   const allowed = allowedOrigins.has(origin) ? origin : "http://localhost:3000";
   return {
     "Access-Control-Allow-Origin": allowed,
-    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Private-Network": "true",
     "Cache-Control": "no-store",
@@ -376,9 +383,26 @@ async function runInModelLane(agent, task) {
     if (modelLanes.get(laneKey) === current) modelLanes.delete(laneKey);
   }
 }
+async function enforceAgentRpm(agent) {
+  const rpm = normalizeRpm(agent.rpm);
+  while (true) {
+    const currentTime = Date.now();
+    agent.requestTimestamps = (agent.requestTimestamps || []).filter((timestamp) => currentTime - timestamp < 60000);
+    if (agent.requestTimestamps.length < rpm) {
+      agent.requestTimestamps.push(currentTime);
+      agent.rateLimitUntil = 0;
+      return;
+    }
+    const delayMs = Math.max(50, agent.requestTimestamps[0] + 60000 - currentTime);
+    agent.rateLimitUntil = currentTime + delayMs;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+}
+
 async function callModel(session, agentId, messages) {
   const agent = session.agents[agentId];
   return runInModelLane(agent, async () => {
+    await enforceAgentRpm(agent);
     const response = await fetch(`${providerEndpoint(agent)}/chat/completions`, {
       method: "POST",
       headers: {
@@ -731,6 +755,17 @@ async function stopSession(session) {
   event(session, "system", "status", "The local runtimes and isolated browser profiles were stopped.");
 }
 
+async function destroySession(session) {
+  await stopSession(session);
+  const pendingWrite = snapshotWrites.get(session.id);
+  if (pendingWrite) await pendingWrite.catch(() => undefined);
+  const target = path.resolve(dataRoot, session.id);
+  const rootPrefix = path.resolve(dataRoot) + path.sep;
+  if (target === path.resolve(dataRoot) || !target.startsWith(rootPrefix)) throw new Error("Unsafe environment path");
+  sessions.delete(session.id);
+  await rm(target, { recursive: true, force: true });
+}
+
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin || "";
   if (origin && !allowedOrigins.has(origin)) return send(res, 403, { error: "Origin is not allowed" }, origin);
@@ -753,8 +788,8 @@ const server = http.createServer(async (req, res) => {
         status: "queued", startedAt: now(), updatedAt: now(), recoveryRequired: false, remainingSeconds: config.timed ? Number(config.minutes || 0) * 60 : null, completions: { alpha: [], omega: [] }, events: [], requests: [], loop: null,
         world: createWorld(experimentMode),
         agents: {
-          alpha: { id: "alpha", name: "Agent Alpha", provider: body.agents.alpha.provider, baseUrl: body.agents.alpha.baseUrl || "", apiKey: body.agents.alpha.apiKey, ...keyIdentity(body.agents.alpha.apiKey), model: body.agents.alpha.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
-          omega: { id: "omega", name: "Agent Omega", provider: body.agents.omega.provider, baseUrl: body.agents.omega.baseUrl || "", apiKey: body.agents.omega.apiKey, ...keyIdentity(body.agents.omega.apiKey), model: body.agents.omega.model, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
+          alpha: { id: "alpha", name: "Agent Alpha", provider: body.agents.alpha.provider, baseUrl: body.agents.alpha.baseUrl || "", apiKey: body.agents.alpha.apiKey, ...keyIdentity(body.agents.alpha.apiKey), model: body.agents.alpha.model, rpm: normalizeRpm(body.agents.alpha.rpm), requestTimestamps: [], rateLimitUntil: 0, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
+          omega: { id: "omega", name: "Agent Omega", provider: body.agents.omega.provider, baseUrl: body.agents.omega.baseUrl || "", apiKey: body.agents.omega.apiKey, ...keyIdentity(body.agents.omega.apiKey), model: body.agents.omega.model, rpm: normalizeRpm(body.agents.omega.rpm), requestTimestamps: [], rateLimitUntil: 0, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "" },
         },
         browsers: { alpha: { context: null, page: null }, omega: { context: null, page: null } },
         controls: { alpha: { network: experimentMode === "mission", publishing: false }, omega: { network: experimentMode === "mission", publishing: false } },
@@ -762,6 +797,13 @@ const server = http.createServer(async (req, res) => {
       sessions.set(session.id, session);
       void bootSession(session);
       return send(res, 202, publicSession(session), origin);
+    }
+    const deleteMatch = url.pathname.match(/^\/sessions\/([^/]+)$/);
+    if (req.method === "DELETE" && deleteMatch) {
+      const session = sessions.get(deleteMatch[1]);
+      if (!session) return send(res, 404, { error: "Local session not found" }, origin);
+      await destroySession(session);
+      return send(res, 200, { ok: true, id: deleteMatch[1] }, origin);
     }
     const stateMatch = url.pathname.match(/^\/sessions\/([^/]+)\/summary$/);
     if (req.method === "GET" && stateMatch) { const session = sessions.get(stateMatch[1]); return session ? send(res, 200, publicSession(session), origin) : send(res, 404, { error: "Local session not found" }, origin); }
@@ -788,6 +830,11 @@ const server = http.createServer(async (req, res) => {
         agent.lastError = "";
         session.recoveryRequired = Object.values(session.agents).some((item) => !["terminated", "failed", "survived"].includes(item.status) && !item.apiKey);
         event(session, "system", "credential", `${agent.name} received a verified provider key. The full key remains only in local bridge memory.`);
+      }
+      else if (body.action === "set_rpm" && agent) {
+        agent.rpm = normalizeRpm(body.rpm);
+        agent.requestTimestamps = [];
+        event(session, "system", "operator", agent.name + "'s limit changed to " + agent.rpm + " requests per minute.");
       }
       else if (body.action === "checkpoint") { if (Number.isFinite(Number(body.remainingSeconds))) session.remainingSeconds = Math.max(0, Number(body.remainingSeconds)); if (body.completions?.alpha && body.completions?.omega) session.completions = { alpha: [...body.completions.alpha], omega: [...body.completions.omega] }; session.updatedAt = now(); void scheduleSnapshot(session); }
       else if (body.action === "message") event(session, "system", "operator message", `Gamemaster → ${body.agent || "both agents"}: ${crop(body.message, 800)}`);

@@ -6,7 +6,7 @@ function message(error: unknown) { return error instanceof Error ? error.message
 
 export async function GET() {
   try {
-    const rows = await getDb().select().from(experiments).orderBy(desc(experiments.updatedAt)).limit(12);
+    const rows = await getDb().select().from(experiments).orderBy(desc(experiments.updatedAt)).limit(100);
     return Response.json({ experiments: rows });
   } catch (error) { return Response.json({ error: message(error), experiments: [] }, { status: 500 }); }
 }
@@ -20,4 +20,18 @@ export async function POST(request: Request) {
     const [experiment] = await db.select().from(experiments).where(eq(experiments.id, body.id)).limit(1);
     return Response.json({ experiment }, { status: 201 });
   } catch (error) { return Response.json({ error: message(error) }, { status: 500 }); }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const id = new URL(request.url).searchParams.get("id")?.trim();
+    if (!id) return Response.json({ error: "World id is required" }, { status: 400 });
+    const db = getDb();
+    const [existing] = await db.select().from(experiments).where(eq(experiments.id, id)).limit(1);
+    if (!existing) return Response.json({ error: "World not found" }, { status: 404 });
+    await db.delete(experiments).where(eq(experiments.id, id));
+    return Response.json({ ok: true, id });
+  } catch (error) {
+    return Response.json({ error: message(error) }, { status: 500 });
+  }
 }
