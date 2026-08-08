@@ -151,13 +151,18 @@ function sanitizeSummary(value, length = 1000) {
     .replace(/bearer\s+[a-zA-Z0-9._~+/-]{8,}/gi, "Bearer [REDACTED]")
     .replace(/data:[^;]+;base64,[a-zA-Z0-9+/=]{32,}/g, "[REDACTED EMBEDDED DATA]");
 }
+function keyIdentity(value) {
+  const key = String(value || "");
+  if (!key) return { keyFingerprint: "", keyEnding: "" };
+  return { keyFingerprint: crypto.createHash("sha256").update(key).digest("hex").slice(0, 10).toUpperCase(), keyEnding: key.slice(-4).replace(/[^a-zA-Z0-9]/g, "•") };
+}
 function event(session, agent, kind, text, detail = "") {
   session.events.unshift({ id: id("event"), at: now(), agent, kind, text: sanitizeSummary(text, 1000), detail: sanitizeSummary(detail, 1000) });
   session.events = session.events.slice(0, 250);
   session.updatedAt = now();
 }
 function publicSession(session) {
-  const safeAgent = (agent) => ({ id: agent.id, name: agent.name, provider: agent.provider, model: agent.model, status: agent.status, runtimeState: agent.status === "running" ? (agent.busy ? "working" : agent.retryAt > Date.now() ? "retrying" : "running") : agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, consecutiveErrors: agent.consecutiveErrors || 0, retryAt: agent.retryAt ? new Date(agent.retryAt).toISOString() : null, lastError: sanitizeSummary(agent.lastError || "", 700), currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700) });
+  const safeAgent = (agent) => ({ id: agent.id, name: agent.name, provider: agent.provider, model: agent.model, ...keyIdentity(agent.apiKey), status: agent.status, runtimeState: agent.status === "running" ? (agent.busy ? "working" : agent.retryAt > Date.now() ? "retrying" : "running") : agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, consecutiveErrors: agent.consecutiveErrors || 0, retryAt: agent.retryAt ? new Date(agent.retryAt).toISOString() : null, lastError: sanitizeSummary(agent.lastError || "", 700), currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700) });
   return {
     id: session.id,
     status: session.status,
@@ -270,7 +275,7 @@ function providerEndpoint(agent) {
   return endpoint;
 }
 const modelLanes = new Map();
-async function useModelLane(agent, task) {
+async function runInModelLane(agent, task) {
   const laneKey = `${providerEndpoint(agent)}:${agent.model}`;
   const previous = modelLanes.get(laneKey) || Promise.resolve();
   let release;
@@ -285,7 +290,7 @@ async function useModelLane(agent, task) {
 }
 async function callModel(session, agentId, messages) {
   const agent = session.agents[agentId];
-  return useModelLane(agent, async () => {
+  return runInModelLane(agent, async () => {
     const response = await fetch(`${providerEndpoint(agent)}/chat/completions`, {
       method: "POST",
       headers: {
@@ -677,6 +682,15 @@ const server = http.createServer(async (req, res) => {
       else if (body.action === "pause" && agent) { agent.status = "paused"; event(session, "system", "operator", `${agent.name} was paused by the Gamemaster.`); }
       else if (body.action === "resume" && agent) { agent.status = "running"; event(session, "system", "operator", `${agent.name} was resumed by the Gamemaster.`); }
       else if (body.action === "terminate" && agent) { agent.status = "terminated"; agent.apiKey = ""; session.controls[body.agent] = { network: false, publishing: false }; if (agent.container) await docker(["rm", "-f", agent.container], 30000).catch(() => undefined); if (session.browsers[body.agent].context) await session.browsers[body.agent].context.close().catch(() => undefined); event(session, "system", "operator", `${agent.name} was terminated, its container was removed, and its browser was closed.`); }
+      else if (body.action === "rotate_key" && agent) {
+        const nextKey = String(body.apiKey || "").trim();
+        if (nextKey.length < 8) return send(res, 400, { error: "Enter a complete API key for this agent" }, origin);
+        agent.apiKey = nextKey;
+        agent.consecutiveErrors = 0;
+        agent.retryAt = 0;
+        agent.lastError = "";
+        event(session, "system", "credential", `${agent.name} received a new provider key. The full key remains only in local bridge memory.`);
+      }
       else if (body.action === "message") event(session, "system", "operator message", `Gamemaster → ${body.agent || "both agents"}: ${crop(body.message, 800)}`);
       else if (body.action === "permission" && agent && ["network", "publishing"].includes(body.key)) {
         const enabled = Boolean(body.enabled);

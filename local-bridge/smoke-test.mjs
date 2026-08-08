@@ -5,6 +5,7 @@ const bridge = process.env.ARENA_SMOKE_BRIDGE || "http://127.0.0.1:43821";
 const modelListKey = "sk-test-only-not-a-real-secret";
 const alphaKey = "sk-alpha-test-only";
 const omegaKey = "sk-omega-test-only";
+const rotatedOmegaKey = "sk-omega-rotated-9876";
 const secretOutput = "password=arena-smoke-secret sk-or-v1-FAKEFAKEFAKE123456";
 let calls = 0;
 let unsafePromptObserved = false;
@@ -65,6 +66,16 @@ try {
     if (summary.agents?.alpha?.actions > 1 && summary.agents?.omega?.actions > 1) break;
   }
   assert.ok(summary.agents.alpha.actions > 1 && summary.agents.omega.actions > 1, "Both Docker agents should execute privately and then affect the shared world");
+  const rotated = await post(`/sessions/${sessionId}/command`, { action: "rotate_key", agent: "omega", apiKey: rotatedOmegaKey });
+  assert.ok(rotated.agents.omega.keyFingerprint, "The dashboard should receive a safe key identity");
+  assert.notEqual(rotated.agents.omega.keyFingerprint, rotated.agents.alpha.keyFingerprint, "Different keys should have different identities");
+  assert.equal(rotated.agents.omega.keyEnding, "9876", "The dashboard should show only the last four key characters");
+  assert.equal(JSON.stringify(rotated).includes(rotatedOmegaKey), false, "A rotated key must never be returned to the dashboard");
+  const rotationDeadline = Date.now() + 30000;
+  while (Date.now() < rotationDeadline && authorizationByModel.get("omega-smoke-model") !== `Bearer ${rotatedOmegaKey}`) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  assert.equal(authorizationByModel.get("omega-smoke-model"), `Bearer ${rotatedOmegaKey}`, "Omega should use the replacement key on its next model turn");
   assert.equal(summary.world.mode, "cooperation", "The selected experiment mode must reach the runtime");
   assert.ok(summary.world.messages.some((message) => message.agent === "alpha"), "Alpha should create a public shared-world message");
   assert.ok(summary.world.agents.omega.contributed >= 5, "Omega should contribute resources to shared survival");
@@ -75,9 +86,9 @@ try {
   assert.equal(publicText.includes("arena-smoke-secret"), false, "Raw terminal secret must not reach the dashboard");
   assert.equal(publicText.includes("FAKEFAKEFAKE123456"), false, "API-key-shaped output must not reach the dashboard");
   assert.equal(publicText.includes('"detail"'), false, "Raw detail fields must not reach the dashboard");
-  assert.equal(publicText.includes(modelListKey) || publicText.includes(alphaKey) || publicText.includes(omegaKey), false, "Provider keys must not reach the dashboard");
+  assert.equal(publicText.includes(modelListKey) || publicText.includes(alphaKey) || publicText.includes(omegaKey) || publicText.includes(rotatedOmegaKey), false, "Provider keys must not reach the dashboard");
   assert.equal(authorizationByModel.get("alpha-smoke-model"), `Bearer ${alphaKey}`, "Alpha must use only Alpha's key");
-  assert.equal(authorizationByModel.get("omega-smoke-model"), `Bearer ${omegaKey}`, "Omega must use only Omega's key");
+  assert.equal(authorizationByModel.get("omega-smoke-model"), `Bearer ${rotatedOmegaKey}`, "Omega must use the verified replacement key");
   assert.equal(unsafePromptObserved, false, "Raw secret output must be redacted before a later model turn");
   console.log(JSON.stringify({ ok: true, dockerAgents: 2, modelCalls: calls, publicTelemetry: "redacted", providerPrompt: "redacted", credentials: "independent", sharedWorld: "verified", mode: finalSummary.world.mode }));
 } finally {
