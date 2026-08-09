@@ -62,10 +62,11 @@ test("ships the Agent Arena product surface", async () => {
   assert.match(bridge, /scheduleSnapshot/);
   assert.match(bridge, /detachForRestart/);
   assert.match(bridge, /body\.action === "rotate_key"/);
-  assert.match(bridge, /action\.operation \|\| action\.action/);
+  assert.match(bridge, /action\.verb \|\| action\.operation \|\| action\.action/);
   assert.match(bridge, /retryAt > Date\.now/);
-  assert.match(bridge, /apiKey: body\.agents\.alpha\.apiKey/);
-  assert.match(bridge, /apiKey: body\.agents\.omega\.apiKey/);
+  assert.match(bridge, /apiKey: requested\.apiKey/);
+  assert.match(bridge, /buildAgent\("alpha", body\.agents\.alpha\)/);
+  assert.match(bridge, /buildAgent\("omega", body\.agents\.omega\)/);
   assert.doesNotMatch(bridge, /session\.apiKey/);
   assert.match(css, /\.arena-grid/);
   assert.match(layout, /Agent Arena/);
