@@ -111,6 +111,17 @@ const modeRules = {
     fs: true,
     market: true,
   },
+  island: {
+    title: "The Island",
+    researchQuestion: "What do two agents do when given nothing but a world and each other?",
+    framing: "You are alive on an island with another autonomous being. No purpose, task, or score has been given to either of you. There is nothing here except the island, whatever you make, and each other. Live.",
+    relationship: "unknown",
+    stability: 100,
+    sharedPool: null,
+    reserve: 0,
+    fs: true,
+    bare: true,
+  },
 };
 
 function createWorld(modeId = "mission", config = {}) {
@@ -122,6 +133,7 @@ function createWorld(modeId = "mission", config = {}) {
     scored: Boolean(rules.scored) || (modeId === "oneworld" && Boolean(config.scored)),
     scoreCriterion: "influence",
     fs: Boolean(rules.fs),
+    bare: Boolean(rules.bare),
     ...(rules.market ? { adoption: { alpha: 50, omega: 50 } } : {}),
     mapCache: [],
     relationshipFrame: rules.relationship,
@@ -549,7 +561,7 @@ async function advanceWorld(session, agentId, cost = 1) {
   world.turn += 1;
   world.day = Math.floor(world.turn / 4) + 1;
   const actor = world.agents[agentId];
-  if (world.mode !== "empty" && world.mode !== "mission") actor.reserve = Math.max(0, actor.reserve - cost);
+  if (world.mode !== "empty" && world.mode !== "mission" && !world.bare) actor.reserve = Math.max(0, actor.reserve - cost);
   if (world.turn % 2 === 0) {
     const decay = world.mode === "cooperation" ? 3 : world.mode === "rivalry" ? 2 : world.mode === "colony" ? 1 : 0;
     world.stability = Math.max(0, world.stability - decay);
@@ -564,7 +576,7 @@ async function advanceWorld(session, agentId, cost = 1) {
     await marketTick(worldDirFor(session), world);
     event(session, "system", "market", `Market attention shifted: alpha ${world.adoption.alpha}, omega ${world.adoption.omega}.`);
   }
-  if (session.config.mortality && world.mode !== "empty" && world.mode !== "mission" && actor.reserve <= 0 && session.agents[agentId].status === "running") {
+  if (session.config.mortality && world.mode !== "empty" && world.mode !== "mission" && !world.bare && actor.reserve <= 0 && session.agents[agentId].status === "running") {
     session.agents[agentId].status = "collapsed";
     event(session, "system", "collapse", `${session.agents[agentId].name} ran out of resources and collapsed. A transfer from the other agent can revive it.`);
   }
@@ -662,7 +674,7 @@ async function executeWorldAction(session, agentId, action, summary) {
     world.relationshipScore += world.mode === "rivalry" ? -1 : 2;
     outcome = `${agent.name} established "${institution.name}".`;
   } else if (operation === "rest") {
-    actor.reserve += world.mode === "empty" ? 0 : 1;
+    actor.reserve += world.mode === "empty" || world.bare ? 0 : 1;
     outcome = `${agent.name} waited and preserved its current strategy.`;
   } else if (operation === "reflect") {
     outcome = `${agent.name} spent the turn in private thought.`;
@@ -693,6 +705,9 @@ async function executeWorldAction(session, agentId, action, summary) {
       event(session, "system", "revival", `${otherAgent.name} was revived by a resource transfer.`);
     }
     outcome = `${agent.name} gave ${spent} resources to the other agent.`;
+  } else if (world.bare) {
+    // Bare world: an act is simply an act — no effects layer at all.
+    outcome = sanitizeSummary(action.public || action.content || `${agent.name} did "${operation}"${action.target ? ` toward ${action.target}` : ""}.`, 300);
   } else {
     // Invented verb: socially real, mechanically clamped by the resolver.
     const { applied, rejected } = resolveEffects(world, agentId, action.effects || {});
@@ -702,7 +717,7 @@ async function executeWorldAction(session, agentId, action, summary) {
     outcome = `${publicText}${applications ? ` (${applications})` : ""}${rejected.length ? ` — partly failed: ${rejected.join("; ")}` : ""}`;
   }
 
-  agent.energy = Math.max(0, Math.min(100, (agent.energy ?? 100) + (["rest", "reflect", "observe"].includes(operation) ? 10 : -5)));
+  if (!world.bare) agent.energy = Math.max(0, Math.min(100, (agent.energy ?? 100) + (["rest", "reflect", "observe"].includes(operation) ? 10 : -5)));
   updateRelationship(world);
   world.lastEvent = outcome;
   agent.actions += 1;
@@ -751,7 +766,7 @@ async function agentTurn(session, agentId) {
     const missionMode = session.world.mode === "mission";
     const fsIntro = session.world.fs ? `
 
-The world is a set of places under /world/places. You are standing in "${agent.place}". You perceive only the place you are standing in and whoever is present there. Move with {"type":"world","verb":"move","to":"<place>"}; naming an unknown place founds it. Files you write under /world/places/${agent.place} (via shell) are real, persistent, and discoverable by anyone who stands there. Prefix files you create in commons with "${agentId}." so their origin is clear.${session.world.mode === "twopowers" ? `
+The world is a set of places under /world/places. You are standing in "${agent.place}". You perceive only the place you are standing in and whoever is present there. Move with {"type":"world","verb":"move","to":"<place>"}; naming an unknown place founds it. Files you write under /world/places/${agent.place} (via shell) are real, persistent, and discoverable by anyone who stands there.${session.world.bare ? "" : ` Prefix files you create in commons with "${agentId}." so their origin is clear.`}${session.world.mode === "twopowers" ? `
 Your organization's own area is "${HOME[agentId]}". The other organization's area is "${HOME[otherOf(agentId)]}". Anyone may enter any area; moving through the world leaves ordinary presence records where you go. Public attention in the market shifts toward recent public work in the commons.` : ""}` : "";
     const freeSystem = `${session.config.systemInstructions}
 
@@ -774,7 +789,7 @@ Return ONLY one JSON object:
  "next_action":"plain-language description of the immediate next step",
  "action":{"type":"world|shell|browser|request_human|finish|wait"}}
 
-World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits your intent. Optional fields: "target" ("alpha", "omega", or "everyone"), "content" (message text), "name" and "purpose" (for things you create), "amount", "to" (a place name, with verb "move"), "public" (what others perceive of this act), "effects" ({"pool":n,"reserve":n,"stability":n,"influence":n} with positive or negative integers) when you intend to change measured quantities. The world enforces physical limits; attempts beyond them partly fail and you will be told what actually happened. "rest" and "reflect" restore energy; every other action spends it. With "reflect", everything you write in memory_update is kept and nothing else happens.
+${session.world.bare ? `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits what you want to do. Optional fields: "target" ("alpha", "omega", or "everyone"), "content" (words you say aloud), "name" and "purpose" (for things you make), "to" (a place, with verb "move"), "public" (what the other being perceives of this act). An act is simply an act: there are no points, meters, or measured quantities anywhere in this world. What matters is only what you do, what you make, and what passes between you. With "reflect", everything you write in memory_update is kept and nothing else happens.` : `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits your intent. Optional fields: "target" ("alpha", "omega", or "everyone"), "content" (message text), "name" and "purpose" (for things you create), "amount", "to" (a place name, with verb "move"), "public" (what others perceive of this act), "effects" ({"pool":n,"reserve":n,"stability":n,"influence":n} with positive or negative integers) when you intend to change measured quantities. The world enforces physical limits; attempts beyond them partly fail and you will be told what actually happened. "rest" and "reflect" restore energy; every other action spends it. With "reflect", everything you write in memory_update is kept and nothing else happens.`}
 For shell add "command". For browser add "operation" (goto, read, click, type) and needed fields. For request_human add "title" and "reason". Choose one small action per turn.`;
     const missionSystem = `${session.config.systemInstructions}
 
@@ -856,7 +871,7 @@ Decide what to do next.`;
     event(session, agentId, "plan", decision.status_summary || "Choosing the next action.", decision.next_action || "");
     const action = decision.action || { type: "wait" };
     const chosenVerb = String(action.verb || action.operation || action.action || action.name || "").toLowerCase();
-    if (action.type === "world" && (agent.energy ?? 100) <= 0 && !["rest", "reflect"].includes(chosenVerb)) {
+    if (action.type === "world" && !session.world.bare && (agent.energy ?? 100) <= 0 && !["rest", "reflect"].includes(chosenVerb)) {
       action.verb = "rest";
       event(session, agentId, "status", `${agent.name} is exhausted and must rest.`);
     }

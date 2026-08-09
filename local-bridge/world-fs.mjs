@@ -7,11 +7,12 @@ import path from "node:path";
 const PLACES = {
   oneworld: ["commons", "north-ridge", "ruins"],
   twopowers: ["commons", "market", "space-alpha", "space-omega", "frontier"],
+  island: ["shore", "forest", "caves"],
 };
 export const HOME = { alpha: "space-alpha", omega: "space-omega" };
 
 export function placesFor(mode) { return PLACES[mode] || null; }
-export function startingPlace(mode, agentId) { return mode === "twopowers" ? HOME[agentId] : "commons"; }
+export function startingPlace(mode, agentId) { return mode === "twopowers" ? HOME[agentId] : mode === "island" ? "shore" : "commons"; }
 const safePlace = (value) => String(value || "commons").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "commons";
 
 export async function initPlaces(worldDir, mode) {
@@ -30,7 +31,7 @@ export async function moveAgent(worldDir, mode, agentId, fromPlace, toPlace, tur
   return target;
 }
 
-export async function sensePlace(worldDir, place, agentId) {
+export async function sensePlace(worldDir, place) {
   const dir = path.join(worldDir, "places", safePlace(place));
   const entries = (await readdir(dir).catch(() => [])).sort();
   const present = [];

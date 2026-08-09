@@ -47,6 +47,17 @@ export function perceive(session, agentId) {
   const world = session.world;
   const agent = session.agents[agentId];
   const actor = world.agents[agentId];
+  if (world.bare) {
+    // Bare worlds have no ledger. A day, a place, whatever was said, and your
+    // own read of the other being — nothing else exists unless the agents make it.
+    return {
+      world: world.title,
+      day: world.day,
+      you: { mood: agent.mood || "neutral", lastHunch: agent.hunch || "", ...(agent.place ? { standingIn: agent.place } : {}) },
+      messagesYouCanSee: visibleMessages(world, agentId).map((m) => ({ from: m.agent, to: m.target || "everyone", text: m.text })),
+      yourImpressionOfTheOther: agent.impressions || "none yet",
+    };
+  }
   const snapshot = {
     world: world.title,
     turn: world.turn,

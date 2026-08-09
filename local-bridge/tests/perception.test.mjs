@@ -12,6 +12,20 @@ function makeSession() {
   return { id: "sess-1", world, agents: { alpha: agent("alpha"), omega: agent("omega") } };
 }
 
+test("bare worlds expose no numbers at all — no reserve, energy, beliefs, or scores", () => {
+  const session = makeSession();
+  session.world.bare = true;
+  session.world.scored = true; // even if set, bare wins
+  session.agents.alpha.place = "shore";
+  session.world.messages = [{ agent: "omega", text: "hello", turn: 1 }];
+  const view = perceive(session, "alpha");
+  assert.deepEqual(Object.keys(view).sort(), ["day", "messagesYouCanSee", "world", "you", "yourImpressionOfTheOther"]);
+  assert.deepEqual(Object.keys(view.you).sort(), ["lastHunch", "mood", "standingIn"]);
+  assert.equal(JSON.stringify(view).includes("reserve"), false);
+  assert.equal(JSON.stringify(view).includes("publicScore"), false);
+  assert.equal(view.messagesYouCanSee[0].text, "hello");
+});
+
 test("beliefs go stale and get bounded, deterministic noise", () => {
   const session = makeSession();
   session.world.sharedPool = 40; // truth moved
