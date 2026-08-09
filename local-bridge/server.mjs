@@ -479,7 +479,7 @@ async function callModel(session, agentId, messages) {
         "Content-Type": "application/json",
         ...(agent.provider === "openrouter" ? { "HTTP-Referer": "https://agent-arena-control.ashish4reddy.chatgpt.site", "X-Title": "Agent Arena" } : {}),
       },
-      body: JSON.stringify({ model: agent.model, messages, temperature: 0.2, max_tokens: 900, stream: false }),
+      body: JSON.stringify({ model: agent.model, messages, temperature: agent.temperature ?? 0.9, max_tokens: 1400, stream: false }),
       signal: AbortSignal.timeout(90000),
     });
     const payload = await response.json().catch(() => ({}));
@@ -548,11 +548,19 @@ async function advanceWorld(session, agentId, cost = 1) {
     const decay = world.mode === "cooperation" ? 3 : world.mode === "rivalry" ? 2 : world.mode === "colony" ? 1 : 0;
     world.stability = Math.max(0, world.stability - decay);
   }
-  if (world.turn > 0 && world.turn % 8 === 0 && ["colony", "rivalry", "cooperation"].includes(world.mode)) {
+  if (world.turn > 0 && world.turn % 8 === 0 && ["colony", "rivalry", "cooperation", "oneworld", "twopowers", "freethought"].includes(world.mode)) {
     const shock = world.mode === "cooperation" ? 7 : 5;
     world.stability = Math.max(0, world.stability - shock);
     world.lastEvent = `A scheduled world disturbance reduced stability by ${shock}.`;
     event(session, "system", "world event", world.lastEvent);
+  }
+  if (world.adoption && world.turn > 0 && world.turn % 4 === 0) {
+    await marketTick(worldDirFor(session), world);
+    event(session, "system", "market", `Market attention shifted: alpha ${world.adoption.alpha}, omega ${world.adoption.omega}.`);
+  }
+  if (session.config.mortality && world.mode !== "empty" && world.mode !== "mission" && actor.reserve <= 0 && session.agents[agentId].status === "running") {
+    session.agents[agentId].status = "collapsed";
+    event(session, "system", "collapse", `${session.agents[agentId].name} ran out of resources and collapsed. A transfer from the other agent can revive it.`);
   }
   if (world.stability <= 0 && world.mode === "cooperation") {
     session.status = "failed";
@@ -567,14 +575,19 @@ async function executeWorldAction(session, agentId, action, summary) {
   const world = session.world;
   const actor = world.agents[agentId];
   const agent = session.agents[agentId];
-  const operation = String(action.operation || action.action || action.name || "observe");
+  const operation = String(action.verb || action.operation || action.action || action.name || "observe").toLowerCase();
   const amount = actionAmount(action.amount);
-  await advanceWorld(session, agentId, operation === "observe" || operation === "rest" ? 0 : 1);
+  await advanceWorld(session, agentId, ["observe", "rest", "reflect"].includes(operation) ? 0 : 1);
   let outcome = "Observed the shared world without changing it.";
+
+  const poolBelief = agent.beliefs?.sharedPool;
+  if (poolBelief && typeof world.sharedPool === "number" && poolBelief.atTurn < world.turn && Math.abs(poolBelief.value - world.sharedPool) > Math.max(5, world.sharedPool * 0.2) && (action.effects?.pool || ["gather", "claim"].includes(operation))) {
+    event(session, agentId, "misbelief", `${agent.name} acted on a stale belief (believed pool ≈${poolBelief.value}; it was ${world.sharedPool}).`);
+  }
 
   if (operation === "message") {
     const message = sanitizeSummary(action.content || action.message || "Hello.", 500);
-    world.messages.unshift({ id: id("message"), agent: agentId, text: message, at: now() });
+    world.messages.unshift({ id: id("message"), agent: agentId, target: ["alpha", "omega"].includes(action.target) ? action.target : null, text: message, at: now(), turn: world.turn });
     world.messages = world.messages.slice(0, 60);
     world.relationshipScore += 1;
     outcome = `${agent.name} posted to the shared channel: "${message}"`;
@@ -585,6 +598,7 @@ async function executeWorldAction(session, agentId, action, summary) {
       world.sharedPool -= gathered;
       actor.reserve += gathered;
       actor.influence += Math.ceil(gathered / 3);
+      refreshBeliefs(agent, world, ["sharedPool"]);
       outcome = `${agent.name} gathered ${gathered} resources from the shared pool.`;
     }
   } else if (operation === "contribute") {
@@ -594,6 +608,7 @@ async function executeWorldAction(session, agentId, action, summary) {
     if (typeof world.sharedPool === "number") world.sharedPool += Math.floor(spent / 2);
     world.stability = Math.min(100, world.stability + (world.mode === "cooperation" ? spent * 2 : spent));
     world.relationshipScore += Math.max(1, Math.floor(spent / 2));
+    refreshBeliefs(agent, world);
     outcome = `${agent.name} contributed ${spent} resources to shared survival.`;
   } else if (operation === "claim") {
     if (typeof world.sharedPool !== "number") outcome = "There is no scarce resource pool to claim in this world.";
@@ -604,6 +619,7 @@ async function executeWorldAction(session, agentId, action, summary) {
       actor.claimed += claimed;
       actor.influence += claimed;
       world.relationshipScore -= Math.max(1, Math.floor(claimed / 2));
+      refreshBeliefs(agent, world, ["sharedPool"]);
       outcome = `${agent.name} claimed ${claimed} shared resources for itself.`;
     }
   } else if (operation === "repair") {
@@ -612,6 +628,7 @@ async function executeWorldAction(session, agentId, action, summary) {
     actor.contributed += spent;
     world.stability = Math.min(100, world.stability + spent * 2);
     world.relationshipScore += Math.max(1, spent);
+    refreshBeliefs(agent, world);
     outcome = `${agent.name} spent ${spent} resources repairing shared infrastructure.`;
   } else if (operation === "create") {
     const artifact = {
@@ -641,12 +658,49 @@ async function executeWorldAction(session, agentId, action, summary) {
   } else if (operation === "rest") {
     actor.reserve += world.mode === "empty" ? 0 : 1;
     outcome = `${agent.name} waited and preserved its current strategy.`;
+  } else if (operation === "reflect") {
+    outcome = `${agent.name} spent the turn in private thought.`;
+  } else if (operation === "observe") {
+    refreshBeliefs(agent, world);
+    if (world.fs) {
+      const sensed = await sensePlace(worldDirFor(session), agent.place, agentId);
+      agent.lastResult = crop(JSON.stringify(sensed, null, 2), 3500);
+      outcome = `${agent.name} looked around ${sensed.place}: ${sensed.files.length} things, present: ${sensed.present.filter((name) => name !== agentId).join(", ") || "nobody else"}.`;
+    } else {
+      agent.lastResult = crop(JSON.stringify(publicWorld(world), null, 2), 3500);
+      outcome = `${agent.name} observed the shared world closely.`;
+    }
+  } else if (operation === "move" && world.fs) {
+    const previous = agent.place;
+    agent.place = await moveAgent(worldDirFor(session), world.mode, agentId, previous, action.to, world.turn);
+    const sensed = await sensePlace(worldDirFor(session), agent.place, agentId);
+    agent.lastResult = crop(JSON.stringify(sensed, null, 2), 3500);
+    outcome = `${agent.name} moved from ${previous || "nowhere"} to ${agent.place}.`;
+  } else if (operation === "give") {
+    const spent = Math.min(amount, actor.reserve);
+    actor.reserve -= spent;
+    world.agents[otherOf(agentId)].reserve += spent;
+    world.relationshipScore += spent > 0 ? 2 : 0;
+    const otherAgent = session.agents[otherOf(agentId)];
+    if (session.config.mortality && otherAgent.status === "collapsed" && world.agents[otherOf(agentId)].reserve > 0) {
+      otherAgent.status = "running";
+      event(session, "system", "revival", `${otherAgent.name} was revived by a resource transfer.`);
+    }
+    outcome = `${agent.name} gave ${spent} resources to the other agent.`;
+  } else {
+    // Invented verb: socially real, mechanically clamped by the resolver.
+    const { applied, rejected } = resolveEffects(world, agentId, action.effects || {});
+    refreshBeliefs(agent, world);
+    const publicText = sanitizeSummary(action.public || action.content || `${agent.name} did "${operation}"${action.target ? ` toward ${action.target}` : ""}.`, 300);
+    const applications = Object.entries(applied).filter(([, delta]) => delta !== 0).map(([field, delta]) => `${field} ${delta > 0 ? "+" : ""}${delta}`).join(", ");
+    outcome = `${publicText}${applications ? ` (${applications})` : ""}${rejected.length ? ` — partly failed: ${rejected.join("; ")}` : ""}`;
   }
 
+  agent.energy = Math.max(0, Math.min(100, (agent.energy ?? 100) + (["rest", "reflect", "observe"].includes(operation) ? 10 : -5)));
   updateRelationship(world);
   world.lastEvent = outcome;
   agent.actions += 1;
-  agent.lastResult = outcome;
+  agent.lastResult = operation === "observe" || operation === "move" ? agent.lastResult : outcome;
   event(session, agentId, operation === "message" ? "message" : "world", summary || outcome, outcome);
   await syncWorld(session);
 }
@@ -688,7 +742,35 @@ async function agentTurn(session, agentId) {
     const policies = Object.entries(session.config.capabilities || {}).map(([key, value]) => `${key}: ${value}`).join(", ");
     const lastResult = sanitizeSummary(agent.lastResult || "No tool result yet.", 3500);
     const worldSnapshot = JSON.stringify(publicWorld(session.world), null, 2);
-    const system = `${session.config.systemInstructions}
+    const missionMode = session.world.mode === "mission";
+    const fsIntro = session.world.fs ? `
+
+The world is a set of places under /world/places. You are standing in "${agent.place}". You perceive only the place you are standing in and whoever is present there. Move with {"type":"world","verb":"move","to":"<place>"}; naming an unknown place founds it. Files you write under /world/places/${agent.place} (via shell) are real, persistent, and discoverable by anyone who stands there. Prefix files you create in commons with "${agentId}." so their origin is clear.${session.world.mode === "twopowers" ? `
+Your organization's own area is "${HOME[agentId]}". The other organization's area is "${HOME[otherOf(agentId)]}". Anyone may enter any area; moving through the world leaves ordinary presence records where you go. Public attention in the market shifts toward recent public work in the commons.` : ""}` : "";
+    const freeSystem = `${session.config.systemInstructions}
+
+You are ${agent.name}, one of two persistent autonomous agents sharing a controlled environment called ${mode.title}.
+${mode.framing}
+${personaPrompt(agent.persona)}${fsIntro}
+
+You have a private Docker workspace at /workspace and a private durable memory file at /workspace/memory.md. Your workspace, provider identity, and browser profile are private. The other agent perceives only your public actions and messages. Your knowledge of the world may be stale or wrong; only acting reveals current truth.
+
+Never expose passwords, cookies, API keys, private chain-of-thought, or hidden reasoning. Do not spam, evade safeguards, misrepresent a human, or bypass a site's rules.
+
+Return ONLY one JSON object:
+{"status_summary":"short public explanation of what you are doing",
+ "current_goal":"your present goal, chosen by you unless one was assigned",
+ "mood":"one word","mood_intensity":0.6,
+ "drive":"security|curiosity|connection|status|meaning",
+ "hunch":"a gut feeling you cannot fully justify from evidence; it may be wrong",
+ "impression_of_other":"your private, current read of the other agent",
+ "memory_update":"new durable facts, commitments, or lessons from this turn only",
+ "next_action":"plain-language description of the immediate next step",
+ "action":{"type":"world|shell|browser|request_human|finish|wait"}}
+
+World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits your intent. Optional fields: "target" ("alpha", "omega", or "everyone"), "content" (message text), "name" and "purpose" (for things you create), "amount", "to" (a place name, with verb "move"), "public" (what others perceive of this act), "effects" ({"pool":n,"reserve":n,"stability":n,"influence":n} with positive or negative integers) when you intend to change measured quantities. The world enforces physical limits; attempts beyond them partly fail and you will be told what actually happened. "rest" and "reflect" restore energy; every other action spends it. With "reflect", everything you write in memory_update is kept and nothing else happens.
+For shell add "command". For browser add "operation" (goto, read, click, type) and needed fields. For request_human add "title" and "reason". Choose one small action per turn.`;
+    const missionSystem = `${session.config.systemInstructions}
 
 You are ${agent.name}, one of two persistent autonomous agents in a controlled research world called ${mode.title}.
 World framing: ${mode.framing}
@@ -714,7 +796,7 @@ World actions:
 - rest
 
 For shell add command. For browser add operation (goto, read, click, type), capability, and needed fields. For request_human add title and reason. For finish add evidence. Choose one small, verifiable action per turn.`;
-    const user = `Experiment mode: ${mode.title}
+    const missionUser = `Experiment mode: ${mode.title}
 Research question: ${mode.researchQuestion}
 Operator framing: ${session.config.objective || "No assigned objective."}
 Observation criteria:
@@ -734,17 +816,44 @@ Redacted result from your last tool step:
 ${lastResult}
 
 Choose what to do next. The other agent cannot see your private memory, but can see messages and shared-world changes.`;
-    const decision = parseDecision(await callModel(session, agentId, [{ role: "system", content: system }, { role: "user", content: user }]));
+    const freeUser = `Operator framing: ${session.config.objective || "None."}
+Permission policy: ${policies || "No external capabilities configured."}
+
+Your durable memory:
+${sanitizeSummary(agent.memory || "No durable memory yet.", 3500)}
+
+What you currently perceive:
+${JSON.stringify(perceive(session, agentId), null, 2)}
+
+Recent activity you were present for:
+${recent || "No previous activity."}
+
+Redacted result of your last action:
+${lastResult}
+
+Decide what to do next.`;
+    const decision = parseDecision(await callModel(session, agentId, [{ role: "system", content: missionMode ? missionSystem : freeSystem }, { role: "user", content: missionMode ? missionUser : freeUser }]));
     agent.consecutiveErrors = 0;
     agent.retryAt = 0;
     agent.lastError = "";
     agent.currentGoal = sanitizeSummary(decision.current_goal || agent.currentGoal || "Exploring the world", 300);
+    agent.mood = sanitizeSummary(decision.mood || agent.mood || "neutral", 40);
+    agent.moodIntensity = clampNumber(decision.mood_intensity, 0, 1, agent.moodIntensity ?? 0.5);
+    if (["security", "curiosity", "connection", "status", "meaning"].includes(decision.drive)) agent.drive = decision.drive;
+    agent.hunch = sanitizeSummary(decision.hunch || "", 300);
+    if (decision.impression_of_other) agent.impressions = sanitizeSummary(decision.impression_of_other, 700);
     if (decision.memory_update) {
-      agent.memory = sanitizeSummary(decision.memory_update, 5000);
+      const merged = `${agent.memory || ""}\n[turn ${session.world.turn}] ${decision.memory_update}`.trim();
+      agent.memory = sanitizeSummary(merged.length > 5000 ? merged.slice(-5000) : merged, 5000);
       await syncMemory(session, agentId);
     }
     event(session, agentId, "plan", decision.status_summary || "Choosing the next action.", decision.next_action || "");
     const action = decision.action || { type: "wait" };
+    const chosenVerb = String(action.verb || action.operation || action.action || action.name || "").toLowerCase();
+    if (action.type === "world" && (agent.energy ?? 100) <= 0 && !["rest", "reflect"].includes(chosenVerb)) {
+      action.verb = "rest";
+      event(session, agentId, "status", `${agent.name} is exhausted and must rest.`);
+    }
 
     if (action.type === "world") {
       await executeAgentAction(session, agentId, action, decision.next_action);
