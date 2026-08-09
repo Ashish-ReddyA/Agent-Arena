@@ -171,6 +171,9 @@ const personaTraits: Record<string, string[]> = {
 };
 const randomPersonaClient = (): Record<string, string> => Object.fromEntries(Object.entries(personaTraits).map(([trait, list]) => [trait, list[Math.floor(Math.random() * list.length)]]));
 const defaultPersonaClient = (): Record<string, string> => Object.fromEntries(Object.entries(personaTraits).map(([trait, list]) => [trait, list[0]]));
+// Sessions can arrive from an older bridge or old saved history with a mode
+// this dashboard doesn't chart (e.g. "mission"); never let one crash the render.
+const validMode = (mode?: string): ExperimentMode => (mode && mode in experimentModes ? (mode as ExperimentMode) : "empty");
 
 const fresh = (id: AgentId): Agent => ({ id, name: id === "alpha" ? "Agent Alpha" : "Agent Omega", model: id === "alpha" ? fallbackModels[0] : fallbackModels[1], rpm: 10, status: "ready", progress: 0, tokens: 0, actions: 0, network: false, publishing: false });
 const freshProvider = (): AgentProviderConfig => ({ provider: "openrouter", apiKey: "", customBaseUrl: "", freeOnly: true, rpm: 10, models: [], status: "Enter this agent's API key and load models" });
@@ -331,7 +334,7 @@ export default function Home() {
   }
   function hydrateLiveSession(state: BridgeSession) {
     const config = state.config ?? {};
-    const mode = state.world.mode;
+    const mode = validMode(state.world.mode);
     const controls = state.controls ?? { alpha: { network: false, publishing: false }, omega: { network: false, publishing: false } };
     const restoredAgents = {
       alpha: { ...fresh("alpha"), ...state.agents.alpha, network: controls.alpha.network, publishing: controls.alpha.publishing },
@@ -498,7 +501,7 @@ setLiveKeyStatus((current) => ({ ...current, [id]: !agents[id].keyLoaded ? `Key 
       setTokenBudget(snapshot.tokenBudget ?? tokenBudget);
       setCapabilities(snapshot.capabilities ?? defaultCapabilities);
       setExecutionMode(snapshot.executionMode ?? 'local');
-      const restoredMode = snapshot.experimentMode ?? "empty";
+      const restoredMode = validMode(snapshot.experimentMode);
       setExperimentMode(restoredMode);
       setWorld(snapshot.world ?? freshWorld(restoredMode));
       setAgentProviders({
