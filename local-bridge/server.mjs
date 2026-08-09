@@ -175,7 +175,9 @@ async function syncWorld(session) {
   const directory = path.join(dataRoot, session.id, "world");
   await mkdir(directory, { recursive: true });
   if (session.world.fs) session.world.mapCache = await listWorldMap(directory);
-  await writeFile(path.join(directory, "state.json"), JSON.stringify(publicWorld(session.world), null, 2), "utf8");
+  const agentVisible = publicWorld(session.world);
+  delete agentVisible.researchQuestion; // agents must not discover what the experiment is measuring
+  await writeFile(path.join(directory, "state.json"), JSON.stringify(agentVisible, null, 2), "utf8");
 }
 async function syncMemory(session, agentId) {
   const agent = session.agents[agentId];
