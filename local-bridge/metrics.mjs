@@ -2,6 +2,30 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
+const BUILTIN_VERBS = new Set(["observe", "message", "gather", "contribute", "claim", "repair", "create", "establish", "rest", "reflect", "move", "give", "forage", "wait"]);
+
+function verbAnalysis(session) {
+  const log = session.actionLog || [];
+  const novel = new Map();
+  const visited = {};
+  const streaks = {};
+  const current = {};
+  for (const entry of log) {
+    if (entry.v && !BUILTIN_VERBS.has(entry.v)) novel.set(entry.v, (novel.get(entry.v) || 0) + 1);
+    if (entry.v === "move" && entry.p) (visited[entry.a] = visited[entry.a] || new Set()).add(entry.p);
+    const last = current[entry.a];
+    if (last && entry.g && last.goal === entry.g) last.length += 1;
+    else current[entry.a] = { goal: entry.g, length: 1 };
+    streaks[entry.a] = Math.max(streaks[entry.a] || 0, current[entry.a].length);
+  }
+  return {
+    novelVerbs: Object.fromEntries(novel),
+    novelVerbRate: log.length ? Number(([...novel.values()].reduce((sum, count) => sum + count, 0) / log.length).toFixed(2)) : 0,
+    longestGoalStreak: streaks,
+    placesVisited: Object.fromEntries(Object.entries(visited).map(([agent, set]) => [agent, set.size])),
+  };
+}
+
 export function computeMetrics(session) {
   const world = session.world;
   const events = session.events || [];
@@ -28,6 +52,16 @@ export function computeMetrics(session) {
     beliefGap,
     adoption: world.adoption ? { ...world.adoption } : null,
     score: world.scored ? { criterion, alpha: world.agents.alpha[criterion] || 0, omega: world.agents.omega[criterion] || 0 } : null,
+    ...verbAnalysis(session),
+    thingsMade: (world.mapCache || []).reduce((sum, place) => sum + (place.things || 0), 0) + (world.artifacts || []).length,
+    switches: {
+      needs: Boolean(world.needs),
+      rewards: world.scoreCriterion === "points",
+      narration: events.some((e) => e.narrated),
+      mute: Boolean(world.mute),
+      endsOnDay: world.endsOnDay || null,
+    },
+    perturbations: events.filter((e) => ["catastrophe", "gift"].includes(e.kind)).length,
   };
 }
 

@@ -50,13 +50,19 @@ export function perceive(session, agentId) {
   if (world.bare) {
     // Bare worlds have no ledger. A day, a place, whatever was said, and your
     // own read of the other being — nothing else exists unless the agents make it.
-    return {
+    const bareView = {
       world: world.title,
       day: world.day,
-      you: { mood: agent.mood || "neutral", lastHunch: agent.hunch || "", ...(agent.place ? { standingIn: agent.place } : {}) },
+      ...(world.endsOnDay ? { theWorldEndsOnDay: world.endsOnDay } : {}),
+      you: { mood: agent.mood || "neutral", lastHunch: agent.hunch || "", ...(agent.place ? { standingIn: agent.place } : {}), ...(world.needs ? { sustenance: actor.sustenance ?? 100 } : {}) },
       messagesYouCanSee: visibleMessages(world, agentId).map((m) => ({ from: m.agent, to: m.target || "everyone", text: m.text })),
       ...(world.solo ? {} : { yourImpressionOfTheOther: agent.impressions || "none yet" }),
     };
+    if (world.scored) {
+      const criterion = world.scoreCriterion || "influence";
+      bareView.publicScore = { criterion, alpha: world.agents.alpha[criterion] || 0, omega: world.agents.omega[criterion] || 0 };
+    }
+    return bareView;
   }
   const snapshot = {
     world: world.title,
@@ -70,6 +76,7 @@ export function perceive(session, agentId) {
       drive: agent.drive || "curiosity",
       lastHunch: agent.hunch || "",
       ...(agent.place ? { standingIn: agent.place } : {}),
+      ...(world.needs ? { sustenance: actor.sustenance ?? 100 } : {}),
     },
     yourBeliefs: describeBeliefs(session, agent),
     messagesYouCanSee: visibleMessages(world, agentId).map((m) => ({ from: m.agent, to: m.target || "everyone", text: m.text })),

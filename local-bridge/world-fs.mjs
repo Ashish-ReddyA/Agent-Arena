@@ -9,11 +9,15 @@ const PLACES = {
   twopowers: ["commons", "market", "space-alpha", "space-omega", "frontier"],
   island: ["shore", "forest", "caves"],
   hermit: ["shore", "forest", "caves"],
+  finite: ["shore", "forest", "caves"],
+  mutes: ["shore", "forest", "caves"],
+  workshop: ["commons", "workshop", "archive"],
 };
 export const HOME = { alpha: "space-alpha", omega: "space-omega" };
+const SHORE_MODES = new Set(["island", "hermit", "finite", "mutes"]);
 
 export function placesFor(mode) { return PLACES[mode] || null; }
-export function startingPlace(mode, agentId) { return mode === "twopowers" ? HOME[agentId] : mode === "island" || mode === "hermit" ? "shore" : "commons"; }
+export function startingPlace(mode, agentId) { return mode === "twopowers" ? HOME[agentId] : SHORE_MODES.has(mode) ? "shore" : "commons"; }
 const safePlace = (value) => String(value || "commons").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "commons";
 
 export async function initPlaces(worldDir, mode) {
@@ -67,6 +71,27 @@ export async function listWorldMap(worldDir) {
     });
   }
   return map;
+}
+
+// Perturbations are real: a catastrophe deletes actual files, a gift writes one.
+export async function destroyPlaceContents(worldDir, place) {
+  const dir = path.join(worldDir, "places", safePlace(place));
+  const entries = await readdir(dir).catch(() => []);
+  let destroyed = 0;
+  for (const name of entries) {
+    if (name.startsWith(".")) continue; // presence and traces survive the storm
+    await rm(path.join(dir, name), { force: true }).catch(() => undefined);
+    destroyed += 1;
+  }
+  return destroyed;
+}
+
+export async function placeGift(worldDir, place, name, content) {
+  const safeName = String(name || "gift").replace(/[^a-zA-Z0-9_.-]+/g, "-").slice(0, 60) || "gift";
+  const dir = path.join(worldDir, "places", safePlace(place));
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, safeName), String(content || ""), "utf8");
+  return safeName;
 }
 
 // Deterministic attention market: total stays 100; adoption drifts 20% per tick

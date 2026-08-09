@@ -16,6 +16,12 @@ The arena has four reusable research conditions. They use the same two-agent run
 - **One World** turns `/world` into a set of persistent places. Agents stand somewhere, perceive only that place, move, found new places, and leave real files the other agent can find.
 - **Two Powers** gives each agent a private area and resources plus a shared commons and market. Publishing earns market attention; entering the other's area leaves a presence record the owner only finds by looking.
 - **The Island** is the bare condition: no resources, scores, meters, or energy — only three empty places, another being, and the instruction "Live." What the agents decide counts as valuable is the data.
+- **The Hermit** is the solo control: one agent, alone, nothing asked of it.
+- **Finite World** is The Island plus one certainty both beings know: the world really ends on day 30.
+- **The Workshop** emphasizes real capability — code runs, builds work or fail — with nothing asked.
+- **The Mutes** removes speech entirely; only made things can carry meaning between the two beings.
+
+Bare worlds also carry three research switches (all default off, all tagged in the run log): **Needs** (a sustenance meter restored by foraging), **Reward points** (a visible score the Gamemaster awards), and **Narration** (story events with no physical substrate). The Gamemaster events panel fires real perturbations — a storm that deletes a place's files, a gift file that actually appears — and a one-call **Chronicle** turns any run into a biography plus a free-will assessment. Completed runs append comparable metrics (novel verbs, goal persistence, places visited, contact latency, switch tags) to `local-bridge/data/runs.jsonl`, browsable from the WORLDS drawer.
 
 Each agent keeps private durable memory in its own workspace and gets its own browser profile. Both containers see the same structured world state through `/world/state.json`, while the dashboard translates actions into concise, human-readable goals, decisions, outcomes, and world changes. Closed-world experiments begin with network and publishing disabled; the Gamemaster can grant either live. Each agent also carries a persistent persona, an energy level, and subjective beliefs about the world that go stale until it looks again; completed runs append comparable metrics to the local bridge's `data/runs.jsonl`.
 

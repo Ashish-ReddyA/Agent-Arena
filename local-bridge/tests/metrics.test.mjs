@@ -34,6 +34,24 @@ test("computeMetrics summarizes contact, cooperation, and belief gaps", () => {
   assert.equal(metrics.beliefGap.omega, 0);
 });
 
+test("verb analysis finds novel verbs, goal persistence, and travel", () => {
+  const session = makeSession();
+  session.actionLog = [
+    { t: 1, a: "alpha", v: "move", p: "forest", g: "explore" },
+    { t: 2, a: "alpha", v: "consecrate", g: "build a shrine" },
+    { t: 3, a: "alpha", v: "consecrate", g: "build a shrine" },
+    { t: 4, a: "alpha", v: "rest", g: "build a shrine" },
+    { t: 5, a: "omega", v: "move", p: "caves", g: "hide" },
+    { t: 6, a: "omega", v: "move", p: "forest", g: "hide" },
+  ];
+  const metrics = computeMetrics(session);
+  assert.deepEqual(metrics.novelVerbs, { consecrate: 2 });
+  assert.equal(metrics.novelVerbRate, 0.33);
+  assert.equal(metrics.longestGoalStreak.alpha, 3);
+  assert.equal(metrics.placesVisited.omega, 2);
+  assert.equal(metrics.switches.needs, false);
+});
+
 test("appendRunLog writes one parseable line per run", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "arena-runs-"));
   await appendRunLog(dir, makeSession());

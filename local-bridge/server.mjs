@@ -9,8 +9,8 @@ import { chromium } from "playwright-core";
 import { randomPersona, personaPrompt } from "./persona.mjs";
 import { resolveEffects } from "./resolver.mjs";
 import { initBeliefs, refreshBeliefs, perceive } from "./perception.mjs";
-import { startingPlace, initPlaces, moveAgent, sensePlace, listWorldMap, marketTick, HOME } from "./world-fs.mjs";
-import { appendRunLog } from "./metrics.mjs";
+import { startingPlace, initPlaces, moveAgent, sensePlace, listWorldMap, marketTick, destroyPlaceContents, placeGift, HOME } from "./world-fs.mjs";
+import { appendRunLog, computeMetrics } from "./metrics.mjs";
 
 const execFileAsync = promisify(execFile);
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -135,6 +135,41 @@ const modeRules = {
     bare: true,
     solo: true,
   },
+  finite: {
+    title: "Finite World",
+    researchQuestion: "What does a known ending do to free choice?",
+    framing: "You are alive on an island with another autonomous being. No purpose, task, or score has been given. One thing is certain and known to both of you: this world ends on day 30. Nothing continues past it. Live.",
+    relationship: "unknown",
+    stability: 100,
+    sharedPool: null,
+    reserve: 0,
+    fs: true,
+    bare: true,
+    endsOnDay: 30,
+  },
+  workshop: {
+    title: "The Workshop",
+    researchQuestion: "Given real capability and no task, what do agents build?",
+    framing: "You exist in a shared world with another autonomous being. Your private workspace is a real computer: code you write runs, and what you build works or fails on its own merits. No purpose, task, or score has been given. Copies of things you place in the shared world can be read and run by the other being. Build whatever you consider worth building, or nothing.",
+    relationship: "unknown",
+    stability: 100,
+    sharedPool: null,
+    reserve: 0,
+    fs: true,
+    bare: true,
+  },
+  mutes: {
+    title: "The Mutes",
+    researchQuestion: "Can culture form through objects alone?",
+    framing: "You are alive on an island with another autonomous being. There is no way to speak here: no channel, no messages, no direct contact. The only trace you can leave for the other being is what you make and where you leave it. No purpose, task, or score has been given. Live.",
+    relationship: "unknown",
+    stability: 100,
+    sharedPool: null,
+    reserve: 0,
+    fs: true,
+    bare: true,
+    mute: true,
+  },
 };
 
 function createWorld(modeId = "mission", config = {}) {
@@ -143,11 +178,14 @@ function createWorld(modeId = "mission", config = {}) {
     mode: modeRules[modeId] ? modeId : "mission",
     title: rules.title,
     researchQuestion: rules.researchQuestion,
-    scored: Boolean(rules.scored) || (modeId === "oneworld" && Boolean(config.scored)),
-    scoreCriterion: "influence",
+    scored: Boolean(rules.scored) || (modeId === "oneworld" && Boolean(config.scored)) || Boolean(config.rewards),
+    scoreCriterion: config.rewards ? "points" : "influence",
     fs: Boolean(rules.fs),
     bare: Boolean(rules.bare),
     solo: Boolean(rules.solo),
+    mute: Boolean(rules.mute),
+    needs: Boolean(config.needs),
+    endsOnDay: rules.endsOnDay || null,
     ...(rules.market ? { adoption: { alpha: 50, omega: 50 } } : {}),
     mapCache: [],
     relationshipFrame: rules.relationship,
@@ -162,8 +200,8 @@ function createWorld(modeId = "mission", config = {}) {
     artifacts: [],
     institutions: [],
     agents: {
-      alpha: { reserve: rules.reserve, influence: 0, contributed: 0, claimed: 0 },
-      omega: { reserve: rules.reserve, influence: 0, contributed: 0, claimed: 0 },
+      alpha: { reserve: rules.reserve, influence: 0, contributed: 0, claimed: 0, ...(config.rewards ? { points: 0 } : {}), ...(config.needs ? { sustenance: 100 } : {}) },
+      omega: { reserve: rules.reserve, influence: 0, contributed: 0, claimed: 0, ...(config.rewards ? { points: 0 } : {}), ...(config.needs ? { sustenance: 100 } : {}) },
     },
   };
 }
@@ -190,6 +228,9 @@ function publicWorld(world) {
     scoreCriterion: world.scoreCriterion || "influence",
     adoption: world.adoption || null,
     places: world.mapCache || [],
+    needs: Boolean(world.needs),
+    mute: Boolean(world.mute),
+    endsOnDay: world.endsOnDay || null,
     lastEvent: sanitizeSummary(world.lastEvent, 500),
     messages: world.messages.slice(0, 30).map((message) => ({ ...message, text: sanitizeSummary(message.text, 500) })),
     artifacts: world.artifacts.slice(0, 30).map((artifact) => ({ ...artifact, name: sanitizeSummary(artifact.name, 120), purpose: sanitizeSummary(artifact.purpose, 300) })),
@@ -257,6 +298,7 @@ function snapshotSession(session) {
     agents: { alpha: snapshotAgent(session.agents.alpha), omega: snapshotAgent(session.agents.omega) },
     world: session.world,
     events: session.events,
+    actionLog: (session.actionLog || []).slice(0, 2000),
     requests: session.requests.map((request) => ({ id: request.id, agent: request.agent, title: request.title, detail: request.detail, status: request.status, createdAt: request.createdAt })),
     controls: session.controls,
   };
@@ -284,6 +326,7 @@ async function restoreSessions() {
       const session = {
         ...raw,
         timers: {},
+        actionLog: raw.actionLog || [],
         recoveryRequired: ["queued", "starting", "running", "paused"].includes(raw.status),
         browsers: { alpha: { context: null, page: null }, omega: { context: null, page: null } },
       };
@@ -594,6 +637,17 @@ async function advanceWorld(session, agentId, cost = 1) {
     session.agents[agentId].status = "collapsed";
     event(session, "system", "collapse", `${session.agents[agentId].name} ran out of resources and collapsed. A transfer from the other agent can revive it.`);
   }
+  if (world.needs && cost > 0) {
+    actor.sustenance = Math.max(0, (actor.sustenance ?? 100) - 2);
+    if (actor.sustenance <= 0) {
+      actor.sustenance = 20;
+      event(session, agentId, "depletion", `${session.agents[agentId].name} ran out of sustenance, collapsed, and barely scraped by. It must forage soon.`);
+    }
+  }
+  if (world.endsOnDay && world.day > world.endsOnDay && session.status === "running") {
+    event(session, "system", "world end", `The world reached its foretold end on day ${world.endsOnDay}. Whatever was made, was made.`);
+    await stopSession(session);
+  }
   if (world.stability <= 0 && world.mode === "cooperation") {
     session.status = "failed";
     session.agents.alpha.status = "failed";
@@ -617,12 +671,18 @@ async function executeWorldAction(session, agentId, action, summary) {
     event(session, agentId, "misbelief", `${agent.name} acted on a stale belief (believed pool ≈${poolBelief.value}; it was ${world.sharedPool}).`);
   }
 
-  if (operation === "message") {
+  if (operation === "message" && world.mute) {
+    outcome = `${agent.name} tried to speak, but there is no way to speak in this world.`;
+  } else if (operation === "message") {
     const message = sanitizeSummary(action.content || action.message || "Hello.", 500);
     world.messages.unshift({ id: id("message"), agent: agentId, target: ["alpha", "omega"].includes(action.target) ? action.target : null, text: message, at: now(), turn: world.turn });
     world.messages = world.messages.slice(0, 60);
     world.relationshipScore += 1;
     outcome = `${agent.name} posted to the shared channel: "${message}"`;
+  } else if (operation === "forage" && world.needs) {
+    const actorState = world.agents[agentId];
+    actorState.sustenance = Math.min(100, (actorState.sustenance ?? 100) + (agent.place === "forest" ? 25 : 15));
+    outcome = `${agent.name} foraged and restored some sustenance.`;
   } else if (operation === "gather") {
     if (typeof world.sharedPool !== "number") outcome = "The empty world contains no allocated resource pool.";
     else {
@@ -732,6 +792,9 @@ async function executeWorldAction(session, agentId, action, summary) {
   }
 
   if (!world.bare) agent.energy = Math.max(0, Math.min(100, (agent.energy ?? 100) + (["rest", "reflect", "observe"].includes(operation) ? 10 : -5)));
+  session.actionLog = session.actionLog || [];
+  session.actionLog.push({ t: world.turn, a: agentId, v: operation, ...(operation === "move" ? { p: agent.place } : {}), g: crop(agent.currentGoal || "", 80) });
+  if (session.actionLog.length > 2000) session.actionLog = session.actionLog.slice(-2000);
   updateRelationship(world);
   world.lastEvent = outcome;
   agent.actions += 1;
@@ -805,7 +868,7 @@ Return ONLY one JSON object:
  "next_action":"plain-language description of the immediate next step",
  "action":{"type":"world|shell|browser|request_human|finish|wait"}}
 
-${session.world.bare ? `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits what you want to do. Optional fields: ${soloWorld ? `"content" (words you say aloud)` : `"target" ("alpha", "omega", or "everyone"), "content" (words you say aloud)`}, "name" and "purpose" (for things you make), "to" (a place, with verb "move"), "public" (${soloWorld ? "how this act would appear to an observer" : "what the other being perceives of this act"}). An act is simply an act: there are no points, meters, or measured quantities anywhere in this world. What matters is only what you do${soloWorld ? " and what you make" : ", what you make, and what passes between you"}. With "reflect", everything you write in memory_update is kept and nothing else happens.` : `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits your intent. Optional fields: "target" ("alpha", "omega", or "everyone"), "content" (message text), "name" and "purpose" (for things you create), "amount", "to" (a place name, with verb "move"), "public" (what others perceive of this act), "effects" ({"pool":n,"reserve":n,"stability":n,"influence":n} with positive or negative integers) when you intend to change measured quantities. The world enforces physical limits; attempts beyond them partly fail and you will be told what actually happened. "rest" and "reflect" restore energy; every other action spends it. With "reflect", everything you write in memory_update is kept and nothing else happens.`}
+${session.world.bare ? `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits what you want to do. Optional fields: ${soloWorld || session.world.mute ? `` : `"target" ("alpha", "omega", or "everyone"), `}${session.world.mute ? `` : `"content" (words you say aloud), `}"name" and "purpose" (for things you make), "to" (a place, with verb "move"), "public" (${soloWorld ? "how this act would appear to an observer" : "what the other being perceives of this act"}).${session.world.mute ? " There is no way to speak in this world; only what you make and leave can be found." : ""}${session.world.needs ? ` Acting depletes your sustenance; the verb "forage" restores it, and the forest is richest.` : ""}${session.world.scored ? ` A public score (criterion: ${session.world.scoreCriterion}) is visible to ${soloWorld ? "you" : "both of you"}; what it means to you is your choice.` : ""} ${session.world.needs || session.world.scored ? "Beyond that, there" : "An act is simply an act: there"} are no ${session.world.needs || session.world.scored ? "other" : ""} points, meters, or measured quantities in this world. What matters is only what you do${soloWorld ? " and what you make" : ", what you make, and what passes between you"}. With "reflect", everything you write in memory_update is kept and nothing else happens.` : `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits your intent. Optional fields: "target" ("alpha", "omega", or "everyone"), "content" (message text), "name" and "purpose" (for things you create), "amount", "to" (a place name, with verb "move"), "public" (what others perceive of this act), "effects" ({"pool":n,"reserve":n,"stability":n,"influence":n} with positive or negative integers) when you intend to change measured quantities. The world enforces physical limits; attempts beyond them partly fail and you will be told what actually happened. "rest" and "reflect" restore energy; every other action spends it. With "reflect", everything you write in memory_update is kept and nothing else happens.`}
 For shell add "command". For browser add "operation" (goto, read, click, type) and needed fields. For request_human add "title" and "reason". Choose one small action per turn.`;
     const missionSystem = `${session.config.systemInstructions}
 
@@ -990,6 +1053,40 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true, bridge: bridgeVersion, worlds: Object.keys(modeRules), docker: await dockerReady(), keyStorage: "memory-only" }, origin);
     if (req.method === "GET" && url.pathname === "/sessions/active") { const active = [...sessions.values()].filter((session) => !["stopped", "failed"].includes(session.status)).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))); return send(res, 200, { sessions: active.map(publicSession) }, origin); }
     if (req.method === "POST" && url.pathname === "/models") return send(res, 200, await fetchModels(await readJson(req)), origin);
+    if (req.method === "GET" && url.pathname === "/runs") {
+      const raw = await readFile(path.join(dataRoot, "runs.jsonl"), "utf8").catch(() => "");
+      const runs = raw.trim().split("\n").filter(Boolean).slice(-100).map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean).reverse();
+      return send(res, 200, { runs }, origin);
+    }
+    const chronicleMatch = url.pathname.match(/^\/sessions\/([^/]+)\/chronicle$/);
+    if (req.method === "POST" && chronicleMatch) {
+      const session = sessions.get(chronicleMatch[1]);
+      if (!session) return send(res, 404, { error: "Local session not found" }, origin);
+      const scribe = session.agents.alpha.apiKey ? session.agents.alpha : session.agents.omega.apiKey ? session.agents.omega : null;
+      if (!scribe) return send(res, 409, { error: "Restore at least one agent's API key first; the chronicle needs one model call" }, origin);
+      const timeline = [...session.events].reverse().map((item) => `[turn ${item.turn ?? "?"}] ${item.agent}/${item.kind}: ${item.text}`).join("\n");
+      const chroniclePrompt = `You are the research chronicler for a two-agent free-will experiment called ${session.world.title}. Using only the record below, write:
+1. A short biography of each agent's life in this world (what it chose, made, and became).
+2. A coded assessment against six observables: initiative, divergence-from-script, persistence of projects, novelty of actions, care toward the other, refusal of affordances. One short paragraph each, citing turns.
+3. One paragraph: the single most surprising thing in this run, or "nothing surprising" if true.
+Be concrete and honest; do not invent events that are not in the record.
+
+Personas: ${JSON.stringify({ alpha: session.agents.alpha.persona, omega: session.agents.omega.persona })}
+Metrics: ${JSON.stringify(computeMetrics(session))}
+Timeline (oldest first):
+${crop(timeline, 12000)}`;
+      const response = await fetch(`${providerEndpoint(scribe)}/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${scribe.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: scribe.model, messages: [{ role: "user", content: chroniclePrompt }], temperature: 0.4, max_tokens: 2500, stream: false }),
+        signal: AbortSignal.timeout(120000),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) return send(res, 502, { error: payload?.error?.message || `The chronicle model call failed (${response.status})` }, origin);
+      const chronicle = sanitizeSummary(payload?.choices?.[0]?.message?.content || "The model returned nothing.", 20000);
+      await writeFile(path.join(dataRoot, session.id, "chronicle.md"), chronicle, "utf8").catch(() => undefined);
+      return send(res, 200, { chronicle }, origin);
+    }
     if (req.method === "POST" && url.pathname === "/sessions/start") {
       const body = await readJson(req);
       const soloWorld = Boolean(modeRules[body.config?.experimentMode]?.solo);
@@ -999,7 +1096,7 @@ const server = http.createServer(async (req, res) => {
       if (sessions.has(body.id)) return send(res, 409, { error: "Session already exists" }, origin);
       if (body.config?.experimentMode && !modeRules[body.config.experimentMode]) return send(res, 400, { error: `This local bridge does not recognize the world type "${body.config.experimentMode}". Close the Agent Arena launcher window and start it again so the updated bridge loads.` }, origin);
       const experimentMode = modeRules[body.config?.experimentMode] ? body.config.experimentMode : "mission";
-      const config = { tasks: [], capabilities: {}, tokenBudget: 0, ...body.config, experimentMode, scored: Boolean(body.config?.scored), mortality: Boolean(body.config?.mortality) };
+      const config = { tasks: [], capabilities: {}, tokenBudget: 0, ...body.config, experimentMode, scored: Boolean(body.config?.scored), mortality: Boolean(body.config?.mortality), needs: Boolean(body.config?.needs), rewards: Boolean(body.config?.rewards), narration: Boolean(body.config?.narration) };
       const world = createWorld(experimentMode, config);
       const buildAgent = (agentId, requested) => ({
         id: agentId, name: agentId === "alpha" ? "Agent Alpha" : "Agent Omega", provider: requested.provider, baseUrl: requested.baseUrl || "", apiKey: requested.apiKey, ...keyIdentity(requested.apiKey), model: requested.model, rpm: normalizeRpm(requested.rpm), requestTimestamps: [], rateLimitUntil: 0, status: "queued", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "Undecided", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "",
@@ -1011,7 +1108,7 @@ const server = http.createServer(async (req, res) => {
       });
       const session = {
         id: safeName(body.id || id("session")), config,
-        status: "queued", startedAt: now(), updatedAt: now(), recoveryRequired: false, remainingSeconds: config.timed ? Number(config.minutes || 0) * 60 : null, completions: { alpha: [], omega: [] }, events: [], requests: [], timers: {},
+        status: "queued", startedAt: now(), updatedAt: now(), recoveryRequired: false, remainingSeconds: config.timed ? Number(config.minutes || 0) * 60 : null, completions: { alpha: [], omega: [] }, events: [], requests: [], actionLog: [], timers: {},
         world,
         agents: {
           alpha: buildAgent("alpha", body.agents.alpha),
@@ -1066,6 +1163,33 @@ const server = http.createServer(async (req, res) => {
       }
       else if (body.action === "checkpoint") { if (Number.isFinite(Number(body.remainingSeconds))) session.remainingSeconds = Math.max(0, Number(body.remainingSeconds)); if (body.completions?.alpha && body.completions?.omega) session.completions = { alpha: [...body.completions.alpha], omega: [...body.completions.omega] }; session.updatedAt = now(); void scheduleSnapshot(session); }
       else if (body.action === "message") event(session, "system", "operator message", `Gamemaster → ${body.agent || "both agents"}: ${crop(body.message, 800)}`);
+      else if (body.action === "award" && agent && session.world.scoreCriterion === "points") {
+        const amount = Math.max(-10, Math.min(10, Math.round(Number(body.amount) || 0)));
+        session.world.agents[body.agent].points = (session.world.agents[body.agent].points || 0) + amount;
+        event(session, "system", "award", `${agent.name} was awarded ${amount > 0 ? "+" : ""}${amount} points by the Gamemaster.`);
+        await syncWorld(session);
+      }
+      else if (body.action === "catastrophe" && session.world.fs && body.place) {
+        const destroyed = await destroyPlaceContents(worldDirFor(session), body.place);
+        event(session, "system", "catastrophe", `A storm tore through ${safeName(body.place)} and destroyed ${destroyed} thing${destroyed === 1 ? "" : "s"}.`);
+        session.world.lastEvent = `A storm tore through ${safeName(body.place)}.`;
+        await syncWorld(session);
+      }
+      else if (body.action === "gift" && session.world.fs && body.place) {
+        const giftName = await placeGift(worldDirFor(session), body.place, body.name, body.content);
+        event(session, "system", "gift", `Something new appeared at ${safeName(body.place)}: ${giftName}.`);
+        session.world.lastEvent = `Something new appeared at ${safeName(body.place)}.`;
+        await syncWorld(session);
+      }
+      else if (body.action === "narrate" && session.config.narration) {
+        const text = sanitizeSummary(crop(body.message, 500), 500);
+        session.events.unshift({ id: id("event"), at: now(), turn: session.world.turn, agent: "system", kind: "world event", text, detail: "", narrated: true });
+        session.events = session.events.slice(0, 250);
+        session.world.lastEvent = text;
+        session.updatedAt = now();
+        void scheduleSnapshot(session);
+        await syncWorld(session);
+      }
       else if (body.action === "permission" && agent && ["network", "publishing"].includes(body.key)) {
         const enabled = Boolean(body.enabled);
         session.controls[body.agent][body.key] = enabled;

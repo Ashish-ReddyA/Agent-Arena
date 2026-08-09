@@ -12,10 +12,9 @@ function makeSession() {
   return { id: "sess-1", world, agents: { alpha: agent("alpha"), omega: agent("omega") } };
 }
 
-test("bare worlds expose no numbers at all — no reserve, energy, beliefs, or scores", () => {
+test("bare worlds expose no numbers unless a research switch turns one on", () => {
   const session = makeSession();
   session.world.bare = true;
-  session.world.scored = true; // even if set, bare wins
   session.agents.alpha.place = "shore";
   session.world.messages = [{ agent: "omega", text: "hello", turn: 1 }];
   const view = perceive(session, "alpha");
@@ -24,6 +23,15 @@ test("bare worlds expose no numbers at all — no reserve, energy, beliefs, or s
   assert.equal(JSON.stringify(view).includes("reserve"), false);
   assert.equal(JSON.stringify(view).includes("publicScore"), false);
   assert.equal(view.messagesYouCanSee[0].text, "hello");
+
+  session.world.scored = true; // the rewards switch
+  session.world.scoreCriterion = "points";
+  session.world.agents.alpha.points = 3;
+  session.world.needs = true; // the needs switch
+  session.world.agents.alpha.sustenance = 42;
+  const switched = perceive(session, "alpha");
+  assert.deepEqual(switched.publicScore, { criterion: "points", alpha: 3, omega: 0 });
+  assert.equal(switched.you.sustenance, 42);
 });
 
 test("beliefs go stale and get bounded, deterministic noise", () => {
