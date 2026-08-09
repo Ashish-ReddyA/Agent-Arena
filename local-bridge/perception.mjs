@@ -55,7 +55,7 @@ export function perceive(session, agentId) {
       day: world.day,
       you: { mood: agent.mood || "neutral", lastHunch: agent.hunch || "", ...(agent.place ? { standingIn: agent.place } : {}) },
       messagesYouCanSee: visibleMessages(world, agentId).map((m) => ({ from: m.agent, to: m.target || "everyone", text: m.text })),
-      yourImpressionOfTheOther: agent.impressions || "none yet",
+      ...(world.solo ? {} : { yourImpressionOfTheOther: agent.impressions || "none yet" }),
     };
   }
   const snapshot = {

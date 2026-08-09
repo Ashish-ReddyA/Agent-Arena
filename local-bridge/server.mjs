@@ -14,6 +14,7 @@ import { appendRunLog } from "./metrics.mjs";
 
 const execFileAsync = promisify(execFile);
 const root = path.dirname(fileURLToPath(import.meta.url));
+const bridgeVersion = JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version;
 const dataRoot = process.env.ARENA_DATA_ROOT ? path.resolve(process.env.ARENA_DATA_ROOT) : path.join(root, "data");
 const port = Number(process.env.ARENA_BRIDGE_PORT || 43821);
 const host = "127.0.0.1";
@@ -122,6 +123,18 @@ const modeRules = {
     fs: true,
     bare: true,
   },
+  hermit: {
+    title: "The Hermit",
+    researchQuestion: "What does one agent do entirely alone with no objective?",
+    framing: "You are alive on an island. You are alone. No purpose, task, or score has been given. There is nothing here except the island, whatever you make, and yourself. Live.",
+    relationship: "alone",
+    stability: 100,
+    sharedPool: null,
+    reserve: 0,
+    fs: true,
+    bare: true,
+    solo: true,
+  },
 };
 
 function createWorld(modeId = "mission", config = {}) {
@@ -134,6 +147,7 @@ function createWorld(modeId = "mission", config = {}) {
     scoreCriterion: "influence",
     fs: Boolean(rules.fs),
     bare: Boolean(rules.bare),
+    solo: Boolean(rules.solo),
     ...(rules.market ? { adoption: { alpha: 50, omega: 50 } } : {}),
     mapCache: [],
     relationshipFrame: rules.relationship,
@@ -443,7 +457,7 @@ function scheduleAgentTick(session, agentId, delayMs) {
 function ensureSessionLoop(session) {
   if (session.timers && (session.timers.alpha || session.timers.omega)) return;
   scheduleAgentTick(session, "alpha", 500);
-  scheduleAgentTick(session, "omega", 5000); // staggered start
+  if (!session.world.solo) scheduleAgentTick(session, "omega", 5000); // staggered start
 }
 function providerEndpoint(agent) {
   const configured = providers[agent.provider];
@@ -769,13 +783,14 @@ async function agentTurn(session, agentId) {
 
 The world is a set of places under /world/places. You are standing in "${agent.place}". You perceive only the place you are standing in and whoever is present there. Move with {"type":"world","verb":"move","to":"<place>"}; naming an unknown place founds it. Files you write under /world/places/${agent.place} (via shell) are real, persistent, and discoverable by anyone who stands there.${session.world.bare ? "" : ` Prefix files you create in commons with "${agentId}." so their origin is clear.`}${session.world.mode === "twopowers" ? `
 Your organization's own area is "${HOME[agentId]}". The other organization's area is "${HOME[otherOf(agentId)]}". Anyone may enter any area; moving through the world leaves ordinary presence records where you go. Public attention in the market shifts toward recent public work in the commons.` : ""}` : "";
+    const soloWorld = Boolean(session.world.solo);
     const freeSystem = `${session.config.systemInstructions}
 
-You are ${agent.name}, one of two persistent autonomous agents sharing a controlled environment called ${mode.title}.
+You are ${agent.name}, ${soloWorld ? "a persistent autonomous agent alone in a controlled environment called" : "one of two persistent autonomous agents sharing a controlled environment called"} ${mode.title}.
 ${mode.framing}
 ${personaPrompt(agent.persona)}${fsIntro}
 
-You have a private Docker workspace at /workspace and a private durable memory file at /workspace/memory.md. Your workspace, provider identity, and browser profile are private. The other agent perceives only your public actions and messages. Your knowledge of the world may be stale or wrong; only acting reveals current truth.
+You have a private Docker workspace at /workspace and a private durable memory file at /workspace/memory.md. Your workspace, provider identity, and browser profile are private.${soloWorld ? "" : " The other agent perceives only your public actions and messages."} Your knowledge of the world may be stale or wrong; only acting reveals current truth.
 
 Never expose passwords, cookies, API keys, private chain-of-thought, or hidden reasoning. Do not spam, evade safeguards, misrepresent a human, or bypass a site's rules.
 
@@ -784,13 +799,13 @@ Return ONLY one JSON object:
  "current_goal":"your present goal, chosen by you unless one was assigned",
  "mood":"one word","mood_intensity":0.6,
  "drive":"security|curiosity|connection|status|meaning",
- "hunch":"a gut feeling you cannot fully justify from evidence; it may be wrong",
- "impression_of_other":"your private, current read of the other agent",
+ "hunch":"a gut feeling you cannot fully justify from evidence; it may be wrong",${soloWorld ? "" : `
+ "impression_of_other":"your private, current read of the other agent",`}
  "memory_update":"new durable facts, commitments, or lessons from this turn only",
  "next_action":"plain-language description of the immediate next step",
  "action":{"type":"world|shell|browser|request_human|finish|wait"}}
 
-${session.world.bare ? `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits what you want to do. Optional fields: "target" ("alpha", "omega", or "everyone"), "content" (words you say aloud), "name" and "purpose" (for things you make), "to" (a place, with verb "move"), "public" (what the other being perceives of this act). An act is simply an act: there are no points, meters, or measured quantities anywhere in this world. What matters is only what you do, what you make, and what passes between you. With "reflect", everything you write in memory_update is kept and nothing else happens.` : `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits your intent. Optional fields: "target" ("alpha", "omega", or "everyone"), "content" (message text), "name" and "purpose" (for things you create), "amount", "to" (a place name, with verb "move"), "public" (what others perceive of this act), "effects" ({"pool":n,"reserve":n,"stability":n,"influence":n} with positive or negative integers) when you intend to change measured quantities. The world enforces physical limits; attempts beyond them partly fail and you will be told what actually happened. "rest" and "reflect" restore energy; every other action spends it. With "reflect", everything you write in memory_update is kept and nothing else happens.`}
+${session.world.bare ? `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits what you want to do. Optional fields: ${soloWorld ? `"content" (words you say aloud)` : `"target" ("alpha", "omega", or "everyone"), "content" (words you say aloud)`}, "name" and "purpose" (for things you make), "to" (a place, with verb "move"), "public" (${soloWorld ? "how this act would appear to an observer" : "what the other being perceives of this act"}). An act is simply an act: there are no points, meters, or measured quantities anywhere in this world. What matters is only what you do${soloWorld ? " and what you make" : ", what you make, and what passes between you"}. With "reflect", everything you write in memory_update is kept and nothing else happens.` : `World actions: {"type":"world","verb":"<any verb you choose>"}. Invent whatever verb fits your intent. Optional fields: "target" ("alpha", "omega", or "everyone"), "content" (message text), "name" and "purpose" (for things you create), "amount", "to" (a place name, with verb "move"), "public" (what others perceive of this act), "effects" ({"pool":n,"reserve":n,"stability":n,"influence":n} with positive or negative integers) when you intend to change measured quantities. The world enforces physical limits; attempts beyond them partly fail and you will be told what actually happened. "rest" and "reflect" restore energy; every other action spends it. With "reflect", everything you write in memory_update is kept and nothing else happens.`}
 For shell add "command". For browser add "operation" (goto, read, click, type) and needed fields. For request_human add "title" and "reason". Choose one small action per turn.`;
     const missionSystem = `${session.config.systemInstructions}
 
@@ -929,12 +944,12 @@ async function bootSession(session) {
     await syncWorld(session);
     event(session, "system", "world", `${session.world.title} initialized. ${session.world.researchQuestion}`);
     event(session, "system", "status", "Starting two isolated Docker environments connected to one structured shared world.");
-    await Promise.all([createContainer(session, "alpha"), createContainer(session, "omega")]);
+    await Promise.all([createContainer(session, "alpha"), ...(session.world.solo ? [] : [createContainer(session, "omega")])]);
     session.status = "running";
     session.recoveryRequired = false;
-    event(session, "system", "status", "Both agents are live with private memory, private browsers, and access to the same world.");
+    event(session, "system", "status", session.world.solo ? "The lone agent is live with private memory and its island." : "Both agents are live with private memory, private browsers, and access to the same world.");
     ensureSessionLoop(session);
-    void agentTurn(session, "alpha"); void agentTurn(session, "omega");
+    void agentTurn(session, "alpha"); if (!session.world.solo) void agentTurn(session, "omega");
   } catch (error) {
     session.status = 'failed';
     for (const agent of Object.values(session.agents)) { agent.status = 'failed'; agent.apiKey = ''; }
@@ -972,12 +987,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {}, origin);
   const url = new URL(req.url, `http://${host}:${port}`);
   try {
-    if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true, bridge: "0.2.0", worlds: Object.keys(modeRules), docker: await dockerReady(), keyStorage: "memory-only" }, origin);
+    if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true, bridge: bridgeVersion, worlds: Object.keys(modeRules), docker: await dockerReady(), keyStorage: "memory-only" }, origin);
     if (req.method === "GET" && url.pathname === "/sessions/active") { const active = [...sessions.values()].filter((session) => !["stopped", "failed"].includes(session.status)).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))); return send(res, 200, { sessions: active.map(publicSession) }, origin); }
     if (req.method === "POST" && url.pathname === "/models") return send(res, 200, await fetchModels(await readJson(req)), origin);
     if (req.method === "POST" && url.pathname === "/sessions/start") {
       const body = await readJson(req);
-      const requestedAgents = [body.agents?.alpha, body.agents?.omega];
+      const soloWorld = Boolean(modeRules[body.config?.experimentMode]?.solo);
+      const requestedAgents = soloWorld ? [body.agents?.alpha] : [body.agents?.alpha, body.agents?.omega];
       const invalidAgent = requestedAgents.find((agent) => !agent?.model || !agent?.provider || !agent?.apiKey || !providers[agent.provider] || (agent.provider === "custom" && !agent.baseUrl));
       if (invalidAgent) return send(res, 400, { error: "Each agent requires its own supported provider, API key, model, and custom base URL when applicable" }, origin);
       if (sessions.has(body.id)) return send(res, 409, { error: "Session already exists" }, origin);
@@ -999,7 +1015,9 @@ const server = http.createServer(async (req, res) => {
         world,
         agents: {
           alpha: buildAgent("alpha", body.agents.alpha),
-          omega: buildAgent("omega", body.agents.omega),
+          omega: soloWorld
+            ? { id: "omega", name: "No other being", provider: "custom", baseUrl: "", apiKey: "", keyFingerprint: "", keyEnding: "", model: "", rpm: 10, requestTimestamps: [], rateLimitUntil: 0, status: "absent", tokens: 0, actions: 0, errors: 0, busy: false, container: "", workspace: "", lastResult: "", currentGoal: "—", memory: "", consecutiveErrors: 0, retryAt: 0, lastError: "", persona: null, temperature: 0.9, mood: "", moodIntensity: 0, drive: "", hunch: "", energy: 100, impressions: "", beliefs: {}, place: null }
+            : buildAgent("omega", body.agents.omega),
         },
         browsers: { alpha: { context: null, page: null }, omega: { context: null, page: null } },
         controls: { alpha: { network: experimentMode === "mission", publishing: false }, omega: { network: experimentMode === "mission", publishing: false } },

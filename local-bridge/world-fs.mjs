@@ -8,11 +8,12 @@ const PLACES = {
   oneworld: ["commons", "north-ridge", "ruins"],
   twopowers: ["commons", "market", "space-alpha", "space-omega", "frontier"],
   island: ["shore", "forest", "caves"],
+  hermit: ["shore", "forest", "caves"],
 };
 export const HOME = { alpha: "space-alpha", omega: "space-omega" };
 
 export function placesFor(mode) { return PLACES[mode] || null; }
-export function startingPlace(mode, agentId) { return mode === "twopowers" ? HOME[agentId] : mode === "island" ? "shore" : "commons"; }
+export function startingPlace(mode, agentId) { return mode === "twopowers" ? HOME[agentId] : mode === "island" || mode === "hermit" ? "shore" : "commons"; }
 const safePlace = (value) => String(value || "commons").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "commons";
 
 export async function initPlaces(worldDir, mode) {

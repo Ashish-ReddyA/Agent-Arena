@@ -8,6 +8,23 @@ const projectDirectory = dirname(bridgeDirectory);
 const checkOnly = process.argv.includes("--check");
 const noOpen = process.argv.includes("--no-open");
 const children = [];
+const expectedBridgeVersion = JSON.parse(readFileSync(join(bridgeDirectory, "package.json"), "utf8")).version;
+
+async function staleBridgeVersion() {
+  try {
+    const response = await fetch("http://127.0.0.1:43821/health", { signal: AbortSignal.timeout(1500) });
+    const health = await response.json();
+    return health.bridge === expectedBridgeVersion ? null : health.bridge || "unknown";
+  } catch {
+    return null;
+  }
+}
+
+function killPortOwner(port) {
+  const netstat = spawnSync("netstat.exe", ["-ano"], { encoding: "utf8", windowsHide: true }).stdout || "";
+  const pids = new Set(netstat.split(/\r?\n/).filter((line) => line.includes(`:${port}`) && line.includes("LISTENING")).map((line) => line.trim().split(/\s+/).pop()).filter(Boolean));
+  for (const pid of pids) spawnSync("taskkill.exe", ["/PID", pid, "/T", "/F"], { stdio: "ignore", windowsHide: true });
+}
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -48,8 +65,10 @@ function startProcess(label, command, args, cwd, environment = {}) {
 }
 
 function stopChildren() {
+  // taskkill /T kills the whole tree: spawn(shell:true) wraps commands in
+  // cmd → npm → node, and child.kill() only reaches the wrapper on Windows.
   for (const child of children) {
-    if (!child.killed) child.kill();
+    if (child.pid) spawnSync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
   }
 }
 
@@ -98,7 +117,16 @@ if (dockerCheck.status !== 0) {
   process.exit(1);
 }
 
-const bridgeReady = await online("http://127.0.0.1:43821/health");
+let bridgeReady = await online("http://127.0.0.1:43821/health");
+if (bridgeReady && !checkOnly) {
+  const stale = await staleBridgeVersion();
+  if (stale) {
+    console.log(`\n[LOCAL BRIDGE] An outdated bridge (v${stale}) is running. Replacing it with v${expectedBridgeVersion}...`);
+    killPortOwner(43821);
+    await delay(900);
+    bridgeReady = false;
+  }
+}
 const dashboardReady = await online("http://127.0.0.1:3000");
 
 if (checkOnly) {
