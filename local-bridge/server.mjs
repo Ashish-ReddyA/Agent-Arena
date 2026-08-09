@@ -28,8 +28,11 @@ const allowedOrigins = new Set([
 const providers = {
   openrouter: { name: "OpenRouter", baseUrl: "https://openrouter.ai/api/v1" },
   nvidia: { name: "NVIDIA NIM", baseUrl: "https://integrate.api.nvidia.com/v1" },
+  lmstudio: { name: "LM Studio (local)", baseUrl: "http://127.0.0.1:1234/v1", local: true },
+  ollama: { name: "Ollama (local)", baseUrl: "http://127.0.0.1:11434/v1", local: true },
   custom: { name: "OpenAI-compatible", baseUrl: "" },
 };
+const isLocalProvider = (provider) => Boolean(providers[provider]?.local);
 
 const worldDirFor = (session) => path.join(dataRoot, session.id, "world");
 const otherOf = (agentId) => (agentId === "alpha" ? "omega" : "alpha");
@@ -375,7 +378,7 @@ function event(session, agent, kind, text, detail = "") {
   void scheduleSnapshot(session);
 }
 function publicSession(session) {
-  const safeAgent = (agent) => { const identity = agent.apiKey ? keyIdentity(agent.apiKey) : { keyFingerprint: agent.keyFingerprint || "", keyEnding: agent.keyEnding || "" }; return { id: agent.id, name: agent.name, provider: agent.provider, baseUrl: agent.baseUrl || "", model: agent.model, rpm: normalizeRpm(agent.rpm), ...identity, keyLoaded: Boolean(agent.apiKey), status: agent.status, runtimeState: agent.status === "running" ? (agent.rateLimitUntil > Date.now() ? "rate_limited" : agent.busy ? "working" : agent.retryAt > Date.now() ? "retrying" : "running") : agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, consecutiveErrors: agent.consecutiveErrors || 0, retryAt: agent.retryAt ? new Date(agent.retryAt).toISOString() : null, lastError: sanitizeSummary(agent.lastError || "", 700), currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700), mood: sanitizeSummary(agent.mood || "neutral", 40), drive: agent.drive || "", hunch: sanitizeSummary(agent.hunch || "", 300), energy: agent.energy ?? 100, impression: sanitizeSummary(agent.impressions || "", 300), persona: agent.persona || null, place: agent.place || null, temperature: agent.temperature ?? 0.9 }; };
+  const safeAgent = (agent) => { const identity = agent.apiKey ? keyIdentity(agent.apiKey) : { keyFingerprint: agent.keyFingerprint || "", keyEnding: agent.keyEnding || "" }; return { id: agent.id, name: agent.name, provider: agent.provider, baseUrl: agent.baseUrl || "", model: agent.model, rpm: normalizeRpm(agent.rpm), ...identity, keyLoaded: Boolean(agent.apiKey) || isLocalProvider(agent.provider), status: agent.status, runtimeState: agent.status === "running" ? (agent.rateLimitUntil > Date.now() ? "rate_limited" : agent.busy ? "working" : agent.retryAt > Date.now() ? "retrying" : "running") : agent.status, tokens: agent.tokens, actions: agent.actions, errors: agent.errors, consecutiveErrors: agent.consecutiveErrors || 0, retryAt: agent.retryAt ? new Date(agent.retryAt).toISOString() : null, lastError: sanitizeSummary(agent.lastError || "", 700), currentGoal: sanitizeSummary(agent.currentGoal || "Undecided", 300), memorySummary: sanitizeSummary(agent.memory || "No durable memory yet.", 700), mood: sanitizeSummary(agent.mood || "neutral", 40), drive: agent.drive || "", hunch: sanitizeSummary(agent.hunch || "", 300), energy: agent.energy ?? 100, impression: sanitizeSummary(agent.impressions || "", 300), persona: agent.persona || null, place: agent.place || null, temperature: agent.temperature ?? 0.9 }; };
   return {
     id: session.id,
     status: session.status,
@@ -429,12 +432,14 @@ async function findBrowser() {
 }
 
 async function fetchModels({ provider, apiKey, baseUrl, freeOnly }) {
-  if (!apiKey?.trim()) throw new Error("API key is required");
   const config = providers[provider];
   if (!config) throw new Error("Unsupported provider");
-  const endpoint = (provider === "custom" ? baseUrl : config.baseUrl)?.replace(/\/$/, "");
+  if (!apiKey?.trim() && !config.local) throw new Error("API key is required");
+  const endpoint = (provider === "custom" ? baseUrl : (config.local && baseUrl?.trim()) || config.baseUrl)?.replace(/\/$/, "");
   if (!endpoint) throw new Error("Base URL is required");
-  const response = await fetch(`${endpoint}/models`, { headers: { Authorization: `Bearer ${apiKey.trim()}`, Accept: "application/json" } });
+  const response = await fetch(`${endpoint}/models`, { headers: { ...(apiKey?.trim() ? { Authorization: `Bearer ${apiKey.trim()}` } : {}), Accept: "application/json" } }).catch(() => {
+    throw new Error(config.local ? `${config.name} is not reachable at ${endpoint}. Start its local server, then try again.` : "The provider could not be reached");
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload?.error?.message || payload?.detail || `Provider returned ${response.status}`);
   const raw = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
@@ -522,7 +527,7 @@ function ensureSessionLoop(session) {
 function providerEndpoint(agent) {
   const configured = providers[agent.provider];
   if (!configured) throw new Error(`Unsupported provider for ${agent.name}`);
-  const endpoint = (agent.provider === "custom" ? agent.baseUrl : configured.baseUrl).replace(/\/$/, "");
+  const endpoint = ((agent.provider === "custom" ? agent.baseUrl : (configured.local && agent.baseUrl?.trim()) || configured.baseUrl) || "").replace(/\/$/, "");
   if (!endpoint) throw new Error(`Base URL is required for ${agent.name}`);
   return endpoint;
 }
@@ -566,7 +571,7 @@ async function callModel(session, agentId, messages) {
     const response = await fetch(`${providerEndpoint(agent)}/chat/completions`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${agent.apiKey}`,
+        ...(agent.apiKey ? { Authorization: `Bearer ${agent.apiKey}` } : {}),
         "Content-Type": "application/json",
         ...(agent.provider === "openrouter" ? { "HTTP-Referer": "https://agent-arena-control.ashish4reddy.chatgpt.site", "X-Title": "Agent Arena" } : {}),
       },
@@ -1087,7 +1092,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && chronicleMatch) {
       const session = sessions.get(chronicleMatch[1]);
       if (!session) return send(res, 404, { error: "Local session not found" }, origin);
-      const scribe = session.agents.alpha.apiKey ? session.agents.alpha : session.agents.omega.apiKey ? session.agents.omega : null;
+      const canScribe = (candidate) => candidate.model && (candidate.apiKey || isLocalProvider(candidate.provider));
+      const scribe = canScribe(session.agents.alpha) ? session.agents.alpha : canScribe(session.agents.omega) ? session.agents.omega : null;
       if (!scribe) return send(res, 409, { error: "Restore at least one agent's API key first; the chronicle needs one model call" }, origin);
       const timeline = [...session.events].reverse().map((item) => `[turn ${item.turn ?? "?"}] ${item.agent}/${item.kind}: ${item.text}`).join("\n");
       const chroniclePrompt = `You are the research chronicler for a two-agent free-will experiment called ${session.world.title}. Using only the record below, write:
@@ -1116,7 +1122,7 @@ ${crop(timeline, 12000)}`;
       const body = await readJson(req);
       const soloWorld = Boolean(modeRules[body.config?.experimentMode]?.solo);
       const requestedAgents = soloWorld ? [body.agents?.alpha] : [body.agents?.alpha, body.agents?.omega];
-      const invalidAgent = requestedAgents.find((agent) => !agent?.model || !agent?.provider || !agent?.apiKey || !providers[agent.provider] || (agent.provider === "custom" && !agent.baseUrl));
+      const invalidAgent = requestedAgents.find((agent) => !agent?.model || !agent?.provider || !providers[agent.provider] || (!agent?.apiKey && !isLocalProvider(agent?.provider)) || (agent.provider === "custom" && !agent.baseUrl));
       if (invalidAgent) return send(res, 400, { error: "Each agent requires its own supported provider, API key, model, and custom base URL when applicable" }, origin);
       if (sessions.has(body.id)) return send(res, 409, { error: "Session already exists" }, origin);
       if (body.config?.experimentMode && !modeRules[body.config.experimentMode]) return send(res, 400, { error: `This local bridge does not recognize the world type "${body.config.experimentMode}". Close the Agent Arena launcher window and start it again so the updated bridge loads.` }, origin);
@@ -1165,7 +1171,7 @@ ${crop(timeline, 12000)}`;
       const body = await readJson(req); const agent = body.agent && session.agents[body.agent];
       if (body.action === "stop") await stopSession(session);
       else if (body.action === "pause" && agent) { agent.status = "paused"; event(session, "system", "operator", `${agent.name} was paused by the Gamemaster.`); }
-      else if (body.action === "resume" && agent) { if (!agent.apiKey) return send(res, 409, { error: `Restore ${agent.name}'s API key before resuming` }, origin); await ensureContainer(session, body.agent); agent.status = "running"; session.status = "running"; session.recoveryRequired = Object.values(session.agents).some((item) => !["terminated", "failed", "survived"].includes(item.status) && !item.apiKey); ensureSessionLoop(session); event(session, "system", "operator", `${agent.name} resumed from its saved world state.`); void agentTurn(session, body.agent); }
+      else if (body.action === "resume" && agent) { if (!agent.apiKey && !isLocalProvider(agent.provider)) return send(res, 409, { error: `Restore ${agent.name}'s API key before resuming` }, origin); await ensureContainer(session, body.agent); agent.status = "running"; session.status = "running"; session.recoveryRequired = Object.values(session.agents).some((item) => !["terminated", "failed", "survived", "absent"].includes(item.status) && !item.apiKey && !isLocalProvider(item.provider)); ensureSessionLoop(session); event(session, "system", "operator", `${agent.name} resumed from its saved world state.`); void agentTurn(session, body.agent); }
       else if (body.action === "terminate" && agent) { agent.status = "terminated"; agent.apiKey = ""; session.controls[body.agent] = { network: false, publishing: false }; if (agent.container) await docker(["rm", "-f", agent.container], 30000).catch(() => undefined); if (session.browsers[body.agent].context) await session.browsers[body.agent].context.close().catch(() => undefined); event(session, "system", "operator", `${agent.name} was terminated, its container was removed, and its browser was closed.`); }
       else if (body.action === "rotate_key" && agent) {
         const nextKey = String(body.apiKey || "").trim();
@@ -1178,7 +1184,7 @@ ${crop(timeline, 12000)}`;
         agent.consecutiveErrors = 0;
         agent.retryAt = 0;
         agent.lastError = "";
-        session.recoveryRequired = Object.values(session.agents).some((item) => !["terminated", "failed", "survived"].includes(item.status) && !item.apiKey);
+        session.recoveryRequired = Object.values(session.agents).some((item) => !["terminated", "failed", "survived", "absent"].includes(item.status) && !item.apiKey && !isLocalProvider(item.provider));
         event(session, "system", "credential", `${agent.name} received a verified provider key. The full key remains only in local bridge memory.`);
       }
       else if (body.action === "set_rpm" && agent) {
