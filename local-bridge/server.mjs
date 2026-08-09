@@ -980,6 +980,7 @@ const server = http.createServer(async (req, res) => {
       const invalidAgent = requestedAgents.find((agent) => !agent?.model || !agent?.provider || !agent?.apiKey || !providers[agent.provider] || (agent.provider === "custom" && !agent.baseUrl));
       if (invalidAgent) return send(res, 400, { error: "Each agent requires its own supported provider, API key, model, and custom base URL when applicable" }, origin);
       if (sessions.has(body.id)) return send(res, 409, { error: "Session already exists" }, origin);
+      if (body.config?.experimentMode && !modeRules[body.config.experimentMode]) return send(res, 400, { error: `This local bridge does not recognize the world type "${body.config.experimentMode}". Close the Agent Arena launcher window and start it again so the updated bridge loads.` }, origin);
       const experimentMode = modeRules[body.config?.experimentMode] ? body.config.experimentMode : "mission";
       const config = { tasks: [], capabilities: {}, tokenBudget: 0, ...body.config, experimentMode, scored: Boolean(body.config?.scored), mortality: Boolean(body.config?.mortality) };
       const world = createWorld(experimentMode, config);
