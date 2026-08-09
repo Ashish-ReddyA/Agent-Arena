@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "smoke": "node smoke-test.mjs"
+    "smoke": "node smoke-test.mjs",
+    "test": "node --test tests/"
   },
   "dependencies": {
     "playwright-core": "1.55.0"
