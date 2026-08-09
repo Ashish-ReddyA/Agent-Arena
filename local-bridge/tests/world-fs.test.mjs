@@ -38,10 +38,13 @@ test("agents can found new places; world map lists presence and thing counts", a
   const dir = await scratch();
   await initPlaces(dir, "oneworld");
   await moveAgent(dir, "oneworld", "omega", null, "New Harbor!!", 1);
+  await writeFile(path.join(dir, "places", "new-harbor", "boat.txt"), "a raft of three logs", "utf8");
   const map = await listWorldMap(dir);
   const harbor = map.find((p) => p.name === "new-harbor");
   assert.ok(harbor);
   assert.deepEqual(harbor.present, ["omega"]);
+  assert.deepEqual(harbor.files, [{ name: "boat.txt", preview: "a raft of three logs" }]);
+  assert.equal(harbor.things, 1);
   await rm(dir, { recursive: true, force: true });
 });
 

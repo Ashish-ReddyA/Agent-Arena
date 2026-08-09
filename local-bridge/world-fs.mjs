@@ -52,10 +52,17 @@ export async function listWorldMap(worldDir) {
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) continue;
     const items = await readdir(path.join(root, entry.name)).catch(() => []);
+    const visible = items.filter((n) => !n.startsWith("."));
+    const files = [];
+    for (const name of visible.slice(0, 8)) {
+      const preview = await readFile(path.join(root, entry.name, name), "utf8").then((text) => text.slice(0, 240)).catch(() => "(unreadable)");
+      files.push({ name, preview });
+    }
     map.push({
       name: entry.name,
       present: items.filter((n) => n.startsWith(".here.")).map((n) => n.slice(".here.".length)),
-      things: items.filter((n) => !n.startsWith(".")).length,
+      things: visible.length,
+      files,
     });
   }
   return map;

@@ -186,7 +186,7 @@ function publicWorld(world) {
 async function syncWorld(session) {
   const directory = path.join(dataRoot, session.id, "world");
   await mkdir(directory, { recursive: true });
-  if (session.world.fs) session.world.mapCache = await listWorldMap(directory);
+  if (session.world.fs) session.world.mapCache = (await listWorldMap(directory)).map((place) => ({ ...place, files: place.files.map((file) => ({ name: sanitizeSummary(file.name, 80), preview: sanitizeSummary(file.preview, 240) })) }));
   const agentVisible = publicWorld(session.world);
   delete agentVisible.researchQuestion; // agents must not discover what the experiment is measuring
   await writeFile(path.join(directory, "state.json"), JSON.stringify(agentVisible, null, 2), "utf8");
@@ -735,6 +735,7 @@ async function executeAgentAction(session, agentId, action, summary) {
     const result = await docker(["exec", agent.container, "bash", "-lc", String(action.command || "pwd")], 120000);
     agent.lastResult = crop(`${result.stdout}\n${result.stderr}`.trim(), 5000);
     event(session, agentId, "work", summary || "Completed a step inside the isolated workspace.", agent.lastResult);
+    if (session.world.fs) await syncWorld(session); // shell writes are how matter gets made; show it immediately
   } else if (action.type === "browser") {
     if (!session.browsers[agentId].context) {
       const request = addRequest(session, agentId, "Open the signed-in browser", "Use OPEN BROWSER / SIGN IN for this agent, complete any login or MFA yourself, then leave the browser open.");
