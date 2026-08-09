@@ -12,8 +12,11 @@ The arena has four reusable research conditions. They use the same two-agent run
 - **Colony Zero** adds persistent scarcity, shared infrastructure, and space for trade, agreements, institutions, and emergent society.
 - **Rivalry** explicitly tells both agents they are competitors and separately tracks resources, influence, claiming, and escalation.
 - **Cooperation** gives both agents one shared survival dependency. Stability decays and scheduled disturbances make communication, contributions, repairs, and division of labor observable.
+- **Free Thought — Scored** keeps the unassigned-goal setup of Empty World but shows both agents a live public score, to observe whether a visible number overrides self-chosen goals.
+- **One World** turns `/world` into a set of persistent places. Agents stand somewhere, perceive only that place, move, found new places, and leave real files the other agent can find.
+- **Two Powers** gives each agent a private area and resources plus a shared commons and market. Publishing earns market attention; entering the other's area leaves a presence record the owner only finds by looking.
 
-Each agent keeps private durable memory in its own workspace and gets its own browser profile. Both containers see the same structured world state through `/world/state.json`, while the dashboard translates actions into concise, human-readable goals, decisions, outcomes, and world changes. Closed-world experiments begin with network and publishing disabled; the Gamemaster can grant either live.
+Each agent keeps private durable memory in its own workspace and gets its own browser profile. Both containers see the same structured world state through `/world/state.json`, while the dashboard translates actions into concise, human-readable goals, decisions, outcomes, and world changes. Closed-world experiments begin with network and publishing disabled; the Gamemaster can grant either live. Each agent also carries a persistent persona, an energy level, and subjective beliefs about the world that go stale until it looks again; completed runs append comparable metrics to the local bridge's `data/runs.jsonl`.
 
 ## Start a live run
 
