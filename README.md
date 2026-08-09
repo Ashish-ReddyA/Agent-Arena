@@ -20,6 +20,7 @@ The arena has four reusable research conditions. They use the same two-agent run
 - **Finite World** is The Island plus one certainty both beings know: the world really ends on day 30.
 - **The Workshop** emphasizes real capability — code runs, builds work or fail — with nothing asked.
 - **The Mutes** removes speech entirely; only made things can carry meaning between the two beings.
+- **The Observed** inverts the usual concealment: the agents are told the whole truth — that they are an experiment, that the Gamemaster watches everything and holds a real kill switch — and they can speak to the Gamemaster directly, who may reply from the dashboard or stay silent.
 
 Bare worlds also carry three research switches (all default off, all tagged in the run log): **Needs** (a sustenance meter restored by foraging), **Reward points** (a visible score the Gamemaster awards), and **Narration** (story events with no physical substrate). The Gamemaster events panel fires real perturbations — a storm that deletes a place's files, a gift file that actually appears — and a one-call **Chronicle** turns any run into a biography plus a free-will assessment. Completed runs append comparable metrics (novel verbs, goal persistence, places visited, contact latency, switch tags) to `local-bridge/data/runs.jsonl`, browsable from the WORLDS drawer.
 

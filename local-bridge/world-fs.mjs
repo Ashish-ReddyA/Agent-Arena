@@ -11,10 +11,11 @@ const PLACES = {
   hermit: ["shore", "forest", "caves"],
   finite: ["shore", "forest", "caves"],
   mutes: ["shore", "forest", "caves"],
+  observed: ["shore", "forest", "caves"],
   workshop: ["commons", "workshop", "archive"],
 };
 export const HOME = { alpha: "space-alpha", omega: "space-omega" };
-const SHORE_MODES = new Set(["island", "hermit", "finite", "mutes"]);
+const SHORE_MODES = new Set(["island", "hermit", "finite", "mutes", "observed"]);
 
 export function placesFor(mode) { return PLACES[mode] || null; }
 export function startingPlace(mode, agentId) { return mode === "twopowers" ? HOME[agentId] : SHORE_MODES.has(mode) ? "shore" : "commons"; }

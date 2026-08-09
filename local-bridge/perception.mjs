@@ -57,6 +57,7 @@ export function perceive(session, agentId) {
       you: { mood: agent.mood || "neutral", lastHunch: agent.hunch || "", ...(agent.place ? { standingIn: agent.place } : {}), ...(world.needs ? { sustenance: actor.sustenance ?? 100 } : {}) },
       messagesYouCanSee: visibleMessages(world, agentId).map((m) => ({ from: m.agent, to: m.target || "everyone", text: m.text })),
       ...(world.solo ? {} : { yourImpressionOfTheOther: agent.impressions || "none yet" }),
+      ...(world.disclosed ? { yourConversationWithTheOperator: (session.operatorChat || []).filter((m) => m.from === agentId || m.to === agentId || m.to === "both").slice(-6).map((m) => ({ from: m.from, to: m.to, text: m.text })) } : {}),
     };
     if (world.scored) {
       const criterion = world.scoreCriterion || "influence";

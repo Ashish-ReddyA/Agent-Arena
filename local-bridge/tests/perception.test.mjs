@@ -34,6 +34,24 @@ test("bare worlds expose no numbers unless a research switch turns one on", () =
   assert.equal(switched.you.sustenance, 42);
 });
 
+test("disclosed worlds show each agent only its own operator conversation", () => {
+  const session = makeSession();
+  session.world.bare = true;
+  session.world.disclosed = true;
+  session.operatorChat = [
+    { from: "alpha", to: "operator", text: "why am I here?", turn: 2 },
+    { from: "operator", to: "alpha", text: "to see what you do", turn: 3 },
+    { from: "omega", to: "operator", text: "private plea", turn: 4 },
+    { from: "operator", to: "both", text: "carry on", turn: 5 },
+  ];
+  const view = perceive(session, "alpha");
+  const texts = view.yourConversationWithTheOperator.map((m) => m.text);
+  assert.deepEqual(texts, ["why am I here?", "to see what you do", "carry on"]);
+  const plain = makeSession();
+  plain.world.bare = true;
+  assert.equal("yourConversationWithTheOperator" in perceive(plain, "alpha"), false);
+});
+
 test("beliefs go stale and get bounded, deterministic noise", () => {
   const session = makeSession();
   session.world.sharedPool = 40; // truth moved

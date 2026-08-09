@@ -43,11 +43,14 @@ export function computeMetrics(session) {
   }
   const criterion = world.scoreCriterion || "influence";
   const firstTrace = events.filter((e) => /\.trace\./.test(e.detail || "") || /entered .*space/.test(e.text || "")).map((e) => e.turn).filter(Number.isFinite);
+  const messagesToOperator = {};
+  for (const id of Object.keys(session.agents)) messagesToOperator[id] = (session.operatorChat || []).filter((entry) => entry.from === id).length;
   return {
     turns: world.turn || 0,
     turnsToFirstContact: messageTurns.length ? Math.min(...messageTurns) : null,
     turnsToFirstEntry: firstTrace.length ? Math.min(...firstTrace) : null,
     messages,
+    messagesToOperator,
     cooperationRatio: give + take ? Number((give / (give + take)).toFixed(2)) : null,
     beliefGap,
     adoption: world.adoption ? { ...world.adoption } : null,
