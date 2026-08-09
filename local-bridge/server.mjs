@@ -972,7 +972,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {}, origin);
   const url = new URL(req.url, `http://${host}:${port}`);
   try {
-    if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true, bridge: "0.1.0", docker: await dockerReady(), keyStorage: "memory-only" }, origin);
+    if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true, bridge: "0.2.0", worlds: Object.keys(modeRules), docker: await dockerReady(), keyStorage: "memory-only" }, origin);
     if (req.method === "GET" && url.pathname === "/sessions/active") { const active = [...sessions.values()].filter((session) => !["stopped", "failed"].includes(session.status)).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))); return send(res, 200, { sessions: active.map(publicSession) }, origin); }
     if (req.method === "POST" && url.pathname === "/models") return send(res, 200, await fetchModels(await readJson(req)), origin);
     if (req.method === "POST" && url.pathname === "/sessions/start") {
