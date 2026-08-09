@@ -442,7 +442,10 @@ function providerEndpoint(agent) {
 }
 const modelLanes = new Map();
 async function runInModelLane(agent, task) {
-  const laneKey = `${providerEndpoint(agent)}:${agent.model}`;
+  // Serialize per provider ACCOUNT (endpoint + key), not per model: free tiers
+  // like NVIDIA NIM cap concurrency per account, so two agents on one account
+  // hitting different models concurrently is an instant 429.
+  const laneKey = `${providerEndpoint(agent)}:${agent.keyFingerprint || agent.model}`;
   const previous = modelLanes.get(laneKey) || Promise.resolve();
   let release;
   const current = new Promise((resolve) => { release = resolve; });
@@ -498,6 +501,7 @@ function describeAgentFailure(error) {
   if (/provider 402|credit|quota|payment/.test(lower)) return { message: "This agent's provider account has no available quota or credits.", detail, retryMs: 60000 };
   if (/provider 403|forbidden|permission/.test(lower)) return { message: "The provider denied this agent access to the selected model.", detail, retryMs: 60000 };
   if (/provider 429|rate.?limit|too many requests/.test(lower)) return { message: "The provider rate-limited this agent.", detail, retryMs: 30000 };
+  if (/provider 404|not found for account|function '.+' not found/.test(lower)) return { message: "The selected model is not available on this agent's provider account. The key is valid, but this model has no live endpoint for you — choose a different model for this agent.", detail, retryMs: 60000 };
   if (/no endpoints|no provider|unavailable model/.test(lower)) return { message: "No provider endpoint is currently available for this agent's model.", detail, retryMs: 30000 };
   if (/fetch failed|network|timeout|timed out|econn/.test(lower)) return { message: "This agent could not reach its model provider.", detail, retryMs: 15000 };
   return { message: "This agent's current step failed.", detail, retryMs: 15000 };
