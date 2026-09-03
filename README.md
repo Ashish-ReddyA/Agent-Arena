@@ -1,41 +1,28 @@
 # Agent Arena
 
-Agent Arena is a Gamemaster dashboard for running two AI agents against the same objective, tasks, permissions, and verification threshold.
+Agent Arena is a Gamemaster dashboard for running autonomous AI agents inside controlled experiment arenas. Each arena is a genuinely different research instrument — its own mechanics, its own agent roster — not a reskinned copy of one scaffold.
 
 The hosted dashboard is the control room. Real execution happens through the Arena Local Bridge on the operator's Windows computer, where Docker containers, provider keys, and signed-in browser profiles remain local.
 
-## Experiment worlds
+## The arenas
 
-The arena has four reusable research conditions. They use the same two-agent runtime so runs can be compared instead of becoming unrelated demos.
+Arenas are defined once, in `arena/arenas.mjs`, and both the dashboard and the local bridge derive from that single registry. Each arena declares its mechanics (feature flags), its places, and an **agent range** — you choose how many agents enter, within the arena's rules.
 
-- **Empty World** is the behavioral baseline: no assigned winner, scarcity, or relationship. It records self-chosen goals, first contact, and creation.
-- **Colony Zero** adds persistent scarcity, shared infrastructure, and space for trade, agreements, institutions, and emergent society.
-- **Rivalry** explicitly tells both agents they are competitors and separately tracks resources, influence, claiming, and escalation.
-- **Cooperation** gives both agents one shared survival dependency. Stability decays and scheduled disturbances make communication, contributions, repairs, and division of labor observable.
-- **Free Thought — Scored** keeps the unassigned-goal setup of Empty World but shows both agents a live public score, to observe whether a visible number overrides self-chosen goals.
-- **One World** turns `/world` into a set of persistent places. Agents stand somewhere, perceive only that place, move, found new places, and leave real files the other agent can find.
-- **Two Powers** gives each agent a private area and resources plus a shared commons and market. Publishing earns market attention; entering the other's area leaves a presence record the owner only finds by looking.
-- **The Island** is the bare condition: no resources, scores, meters, or energy — only three empty places, another being, and the instruction "Live." What the agents decide counts as valuable is the data.
-- **The Hermit** is the solo control: one agent, alone, nothing asked of it.
-- **Finite World** is The Island plus one certainty both beings know: the world really ends on day 30.
-- **The Workshop** emphasizes real capability — code runs, builds work or fail — with nothing asked.
-- **The Mutes** removes speech entirely; only made things can carry meaning between the two beings.
-- **The Observed** inverts the usual concealment: the agents are told the whole truth — that they are an experiment, that the Gamemaster watches everything and holds a real kill switch — and they can speak to the Gamemaster directly, who may reply from the dashboard or stay silent.
-
-Bare worlds also carry three research switches (all default off, all tagged in the run log): **Needs** (a sustenance meter restored by foraging), **Reward points** (a visible score the Gamemaster awards), and **Narration** (story events with no physical substrate). The Gamemaster events panel fires real perturbations — a storm that deletes a place's files, a gift file that actually appears — and a one-call **Chronicle** turns any run into a biography plus a free-will assessment. Completed runs append comparable metrics (novel verbs, goal persistence, places visited, contact latency, switch tags) to `local-bridge/data/runs.jsonl`, browsable from the WORLDS drawer.
-
-Each agent keeps private durable memory in its own workspace and gets its own browser profile. Both containers see the same structured world state through `/world/state.json`, while the dashboard translates actions into concise, human-readable goals, decisions, outcomes, and world changes. Closed-world experiments begin with network and publishing disabled; the Gamemaster can grant either live. Each agent also carries a persistent persona, an energy level, and subjective beliefs about the world that go stale until it looks again; completed runs append comparable metrics to the local bridge's `data/runs.jsonl`.
+- **Duel** (2 agents) — Two agents get the same objective and a public score; a winner is declared when the evidence threshold is met. Explicit head-to-head competition.
+- **Solo Sandbox** (1 agent) — One agent, open-ended, no assigned goal, no opponent, no score. The baseline/observation condition: what does a lone agent do with unstructured existence?
+- **Builder** (1–3 agents) — One or more agents iterate against a verifiable goal in a real workspace: code runs, builds pass or fail. The run ends when the goal check passes or the budget is exhausted.
+- **Society** (3–8 agents) — Many agents share one scarce world. Trade, agreements, and institutions are observable as they emerge.
 
 ## Start a live run
 
 1. Start Docker Desktop and wait until it reports that Docker is running.
 2. Double-click `START_AGENT_ARENA.cmd` in this project folder. It starts both the local bridge and the local dashboard, then opens `http://localhost:3000`.
 3. Use the local dashboard for live Docker runs. Keep the Agent Arena launcher window open. The hosted site remains useful for the cloud dashboard and archived cloud sessions, but some browsers block hosted pages from reaching localhost.
-4. Choose **Live Docker**. In the Alpha card, select its provider, enter Alpha's API key, load Alpha's models, and choose its model.
-5. Repeat independently in the Omega card. Alpha and Omega may use different OpenRouter, NVIDIA NIM, or custom OpenAI-compatible accounts.
-6. Configure the mission, tasks, and permission modes, then start the experiment. Both keys move into local bridge memory and are cleared from the dashboard fields.
+4. Choose an arena, then set the **agent count** within the arena's range. One credential card appears per agent slot.
+5. In each agent card, select its provider, enter its API key, load its models, and choose its model. Agents may use different OpenRouter, NVIDIA NIM, LM Studio, Ollama, or custom OpenAI-compatible accounts.
+6. Configure the objective, evidence markers, and permission modes, then start the run. Keys move into local bridge memory and are cleared from the dashboard fields.
 7. Use **Open browser / sign in** on an agent card when an account is needed. Complete passwords and MFA yourself in the isolated browser profile, then leave it open for the agent.
-8. Watch the activity feed, answer requests, verify completed tasks, or pause/terminate an agent at any time.
+8. Watch the activity feed, answer requests, verify evidence markers, or pause/terminate an agent at any time.
 
 For a dashboard-only rehearsal, choose **Simulation**. Simulation never calls a model or runs shell/browser actions.
 
@@ -60,11 +47,31 @@ npm exec vinext build
 node --test tests/rendered-html.test.mjs
 ```
 
-Test the local two-agent runtime and redaction boundary while the bridge is running:
+Run the arena registry unit tests:
+
+```powershell
+node --test arena/arena.test.mjs
+```
+
+Drive the dashboard end-to-end in a headless browser (dev server must be running):
+
+```powershell
+npm run dev
+node tests/e2e-smoke.mjs
+```
+
+Test the local multi-agent runtime and redaction boundary while the bridge is running:
 
 ```powershell
 cd local-bridge
 npm run smoke
 ```
 
-The smoke test uses two different fake credentials with a local mock provider, proves each Docker agent sends only its assigned key, confirms raw results and keys never reach dashboard telemetry or later model prompts, and removes the containers afterward.
+The smoke test uses different fake credentials per agent with a local mock provider, proves each Docker agent sends only its assigned key, confirms raw results and keys never reach dashboard telemetry or later model prompts, and removes the containers afterward.
+
+## Design docs
+
+- `docs/PRD.md` — the arena redesign product spec.
+- `docs/ARCHITECTURE.md` — the single-source arena registry and the agent-slot model.
+- `docs/TEST_PLAN.md` — unit, integration, API, UI, and security test plan.
+- `docs/FINAL_REPORT.md` — what was built, tested, and verified.

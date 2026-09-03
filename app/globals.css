@@ -31,3 +31,45 @@
 .command>.command-actions{padding:0;border-right:0}
 .world-map{margin-top:12px;border:1px solid var(--ink);background:var(--panel)}.world-map>header{padding:14px 20px;border-bottom:1px solid var(--ink)}.world-map>header h2{font-size:16px;margin:6px 0 0}.world-map>header p{font-size:11px;color:var(--muted);margin:6px 0 0;line-height:1.45;max-width:640px}.place-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}.place-card{border-right:1px solid var(--line);padding:14px 18px;min-height:110px}.place-card:last-child{border-right:0}.place-head{display:flex;align-items:center;gap:8px;margin-bottom:9px;flex-wrap:wrap}.place-head b{font:900 12px/1 monospace;letter-spacing:.06em}.place-head em{font:800 8px/1 monospace;font-style:normal;padding:3px 6px;border:1px solid var(--line);background:var(--paper)}.place-head em.alpha{box-shadow:inset 3px 0 0 var(--alpha)}.place-head em.omega{box-shadow:inset 3px 0 0 var(--omega)}.place-card ul{list-style:none;margin:0;padding:0}.place-card li{margin-bottom:9px}.place-card li span{font:800 9px/1 monospace}.place-card li p{font-size:10px;color:var(--muted);margin:3px 0 0;line-height:1.4;white-space:pre-wrap;word-break:break-word}.place-empty{font-size:10px;color:var(--muted)}.made-strip{border-top:1px solid var(--line);padding:12px 18px}.made-strip span{font:800 8px/1 monospace;letter-spacing:.09em;color:var(--muted)}.made-strip p{font-size:11px;margin:6px 0 0}.made-strip em{color:var(--muted);font-style:normal}
 @media(max-width:900px){.place-grid{grid-template-columns:1fr}.place-card{border-right:0;border-bottom:1px solid var(--line)}.place-card:last-child{border-bottom:0}}
+
+/* === Arena redesign: slot-driven roster (1, 2, or N agents) === */
+.agent,.credential-card,.event,.world-agents article,.rate-grid label{--slot:var(--ink)}
+/* The board no longer assumes exactly two agents. Agents flow in a flexible
+   grid and the feed spans below them; per-slot accents come from slot-N. */
+.slot-0{--slot:var(--alpha)}.slot-1{--slot:var(--omega)}.slot-2{--slot:#0e8a5f}.slot-3{--slot:#c2a13a}
+.credential-card.slot-0,.credential-card.slot-1,.credential-card.slot-2,.credential-card.slot-3{box-shadow:4px 4px 0 var(--slot)}
+.rate-grid label.slot-0,.rate-grid label.slot-1,.rate-grid label.slot-2,.rate-grid label.slot-3{box-shadow:4px 4px 0 var(--slot)}
+.arena-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));grid-template-areas:none;gap:12px;margin-top:12px}
+.arena-grid .agent{grid-area:auto;min-height:520px}
+.arena-grid .feed{grid-area:auto;grid-column:1/-1;min-height:520px}
+.agent .identity>i,.slot-0 .identity>i,.slot-1 .identity>i,.slot-2 .identity>i,.slot-3 .identity>i{background:var(--slot)}
+.slot-0 .progress>i b,.slot-1 .progress>i b,.slot-2 .progress>i b,.slot-3 .progress>i b{background:var(--slot)}
+.event.slot-0>i,.event.slot-1>i,.event.slot-2>i,.event.slot-3>i{background:var(--slot)}
+.world-agents article.slot-0,.world-agents article.slot-1,.world-agents article.slot-2,.world-agents article.slot-3{box-shadow:inset 4px 0 0 var(--slot)}
+.survival-score .slot-0 b,.survival-score .slot-1 b,.survival-score .slot-2 b,.survival-score .slot-3 b{color:var(--slot)}
+.task-row button.slot-0:hover,.task-row button.slot-0.verified,.task-row button.slot-1:hover,.task-row button.slot-1.verified,.task-row button.slot-2:hover,.task-row button.slot-2.verified,.task-row button.slot-3:hover,.task-row button.slot-3.verified{border-color:var(--slot);background:var(--slot);color:#fff}
+.place-head em.slot-0,.place-head em.slot-1,.place-head em.slot-2,.place-head em.slot-3{box-shadow:inset 3px 0 0 var(--slot)}
+/* Survival score and task rows flex to any roster size. */
+.survival-score{display:flex;flex-wrap:wrap}
+.survival-score>div{flex:1;min-width:120px}
+.task-row{grid-template-columns:42px 1fr repeat(auto-fit,minmax(72px,auto))}
+/* World-agent stat cards wrap cleanly for larger rosters. */
+.world-agents{display:flex;flex-wrap:wrap}
+.world-agents article{flex:1;min-width:230px;border-left:0;border-top:1px solid var(--line)}
+/* Agent-count stepper on the setup/runtime panel. */
+.agent-count{margin-top:18px;padding:14px 16px;background:var(--paper)}
+.agent-count>span{font:800 8px/1 monospace;letter-spacing:.12em;color:var(--muted)}
+.agent-count-row{display:flex;align-items:center;gap:12px;margin-top:9px}
+.agent-count-row b{font:900 24px/1 monospace;min-width:34px;text-align:center}
+.agent-count-row button{width:34px;height:34px;border:1px solid var(--ink);background:var(--panel);font:900 16px/1 monospace}
+.agent-count-row button:disabled{opacity:.3}
+.agent-count-row small{color:var(--muted);font-size:9px;margin-left:auto}
+/* Arena card accents for the four new arenas. */
+.experiment-mode-card.arena-duel.active{box-shadow:4px 4px 0 var(--danger)}
+.experiment-mode-card.arena-solo.active{box-shadow:4px 4px 0 #777}
+.experiment-mode-card.arena-builder.active{box-shadow:4px 4px 0 #c2a13a}
+.experiment-mode-card.arena-society.active{box-shadow:4px 4px 0 #0e8a5f}
+.world-board.arena-duel>header{box-shadow:inset 5px 0 0 var(--danger)}
+.world-board.arena-solo>header{box-shadow:inset 5px 0 0 #777}
+.world-board.arena-builder>header{box-shadow:inset 5px 0 0 #c2a13a}
+.world-board.arena-society>header{box-shadow:inset 5px 0 0 #0e8a5f}

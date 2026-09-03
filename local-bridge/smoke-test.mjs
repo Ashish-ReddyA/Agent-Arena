@@ -55,7 +55,7 @@ try {
       alpha: { model: "alpha-smoke-model", provider: "custom", apiKey: alphaKey, baseUrl: "http://127.0.0.1:43822/v1" },
       omega: { model: "omega-smoke-model", provider: "custom", apiKey: omegaKey, baseUrl: "http://127.0.0.1:43822/v1" },
     },
-    config: { experimentMode: "cooperation", objective: "Verify the live bridge safely.", systemInstructions: "Perform only the smoke test.", tasks: [{ title: "Run a harmless container command" }], threshold: 1, capabilities: { terminal: "execute", browser: "deny", publicPost: "deny", directMessage: "deny", media: "deny", hosting: "deny", analytics: "observe" } },
+    config: { arenaId: "duel", agentCount: 2, objective: "Verify the live bridge safely.", systemInstructions: "Perform only the smoke test.", tasks: [{ title: "Run a harmless container command" }], threshold: 1, capabilities: { terminal: "execute", browser: "deny", publicPost: "deny", directMessage: "deny", media: "deny", hosting: "deny", analytics: "observe" } },
   });
   let summary;
   const deadline = Date.now() + 120000;

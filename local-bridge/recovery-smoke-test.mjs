@@ -88,7 +88,7 @@ try {
       alpha: { model: "recovery-alpha", provider: "custom", apiKey: alphaKey, baseUrl: providerUrl, rpm: 8 },
       omega: { model: "recovery-omega", provider: "custom", apiKey: omegaKey, baseUrl: providerUrl, rpm: 8 },
     },
-    config: { experimentMode: "cooperation", name: "Recovery test", objective: "Survive a bridge restart.", metric: "World progress persists", systemInstructions: "Contribute safely.", tasks: [{ id: "persist", title: "Persist state" }], threshold: 1, timed: true, minutes: 10, tokenBudget: 10000, capabilities: { terminal: "execute", browser: "deny" } },
+    config: { arenaId: "duel", agentCount: 2, name: "Recovery test", objective: "Survive a bridge restart.", metric: "World progress persists", systemInstructions: "Contribute safely.", tasks: [{ id: "persist", title: "Persist state" }], threshold: 1, timed: true, minutes: 10, tokenBudget: 10000, capabilities: { terminal: "execute", browser: "deny" } },
   });
   sessionStarted = true;
   const before = await waitForActions(0, 0);

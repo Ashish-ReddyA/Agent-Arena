@@ -1,37 +1,43 @@
 // The filesystem IS the world: /world/places/<name> is a location, files in it
 // are things, ".here.<agent>" marks presence. Both containers mount /world rw.
 // ponytail: last-writer-wins on concurrent file writes; per-file locks if clobbering ever matters.
+//
+// Places and home areas come from the arena definition (arena/arenas.mjs), not a
+// hardcoded per-mode map. Agent ids are slot ids (alpha/omega for a two-agent
+// arena, agent-1..N otherwise), so nothing here assumes exactly two agents.
 import { mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises";
 import path from "node:path";
 
-const PLACES = {
-  oneworld: ["commons", "north-ridge", "ruins"],
-  twopowers: ["commons", "market", "space-alpha", "space-omega", "frontier"],
-  island: ["shore", "forest", "caves"],
-  hermit: ["shore", "forest", "caves"],
-  finite: ["shore", "forest", "caves"],
-  mutes: ["shore", "forest", "caves"],
-  observed: ["shore", "forest", "caves"],
-  workshop: ["commons", "workshop", "archive"],
-};
-export const HOME = { alpha: "space-alpha", omega: "space-omega" };
-const SHORE_MODES = new Set(["island", "hermit", "finite", "mutes", "observed"]);
-
-export function placesFor(mode) { return PLACES[mode] || null; }
-export function startingPlace(mode, agentId) { return mode === "twopowers" ? HOME[agentId] : SHORE_MODES.has(mode) ? "shore" : "commons"; }
-const safePlace = (value) => String(value || "commons").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "commons";
-
-export async function initPlaces(worldDir, mode) {
-  for (const place of placesFor(mode) || []) await mkdir(path.join(worldDir, "places", place), { recursive: true });
+// The arena's declared fs map. `arena` is the validated arena definition.
+export function placesFor(arena) {
+  return Array.isArray(arena?.places) ? arena.places : null;
 }
 
-export async function moveAgent(worldDir, mode, agentId, fromPlace, toPlace, turn) {
+// Where a slot starts: its declared home area, else the first shared place.
+export function startingPlace(arena, slot) {
+  if (slot?.home) return slot.home;
+  const places = placesFor(arena);
+  return places && places.length ? places[0] : null;
+}
+
+const safePlace = (value) => String(value || "commons").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "commons";
+
+export async function initPlaces(worldDir, arena) {
+  for (const place of placesFor(arena) || []) await mkdir(path.join(worldDir, "places", place), { recursive: true });
+}
+
+// The set of places that are another slot's private home area (for presence-trace
+// mechanics). Returns [] when the arena has no private areas.
+function otherHomes(agentId, slots) {
+  return (slots || []).filter((slot) => slot.id !== agentId && slot.home).map((slot) => slot.home);
+}
+
+export async function moveAgent(worldDir, arena, agentId, fromPlace, toPlace, turn, slots = []) {
   const target = safePlace(toPlace);
   await mkdir(path.join(worldDir, "places", target), { recursive: true }); // founding a new place is allowed
   if (fromPlace) await rm(path.join(worldDir, "places", safePlace(fromPlace), `.here.${agentId}`), { force: true });
   await writeFile(path.join(worldDir, "places", target, `.here.${agentId}`), String(turn), "utf8");
-  const otherHome = agentId === "alpha" ? HOME.omega : HOME.alpha;
-  if (mode === "twopowers" && target === otherHome) {
+  if (otherHomes(agentId, slots).includes(target)) {
     await writeFile(path.join(worldDir, "places", target, `.trace.${agentId}.${turn}`), "", "utf8");
   }
   return target;
@@ -97,16 +103,25 @@ export async function placeGift(worldDir, place, name, content) {
 
 // Deterministic attention market: total stays 100; adoption drifts 20% per tick
 // toward the split of published files in the commons, by "<agent>." prefix.
-// ponytail: count-based freshness; weight by file recency if this gets gamed.
+// Works for any roster size — adoption is keyed by slot id.
 export async function marketTick(worldDir, world) {
-  if (!world.adoption) world.adoption = { alpha: 50, omega: 50 };
+  const ids = Object.keys(world.agents || {});
+  if (!ids.length) return;
+  if (!world.adoption) world.adoption = Object.fromEntries(ids.map((agentId) => [agentId, Math.round(100 / ids.length)]));
+  for (const agentId of ids) if (typeof world.adoption[agentId] !== "number") world.adoption[agentId] = 0;
   const entries = await readdir(path.join(worldDir, "places", "commons")).catch(() => []);
-  const weight = { alpha: 1, omega: 1 };
+  const weight = Object.fromEntries(ids.map((agentId) => [agentId, 1]));
   for (const name of entries) {
-    const match = name.match(/^(alpha|omega)\./);
-    if (match) weight[match[1]] += 2;
+    const match = name.match(/^([a-z0-9-]+)\./);
+    if (match && match[1] in weight) weight[match[1]] += 2;
   }
-  const target = (weight.alpha / (weight.alpha + weight.omega)) * 100;
-  world.adoption.alpha = Math.round(world.adoption.alpha + (target - world.adoption.alpha) * 0.2);
-  world.adoption.omega = 100 - world.adoption.alpha;
+  const total = ids.reduce((sum, agentId) => sum + weight[agentId], 0);
+  let assigned = 0;
+  ids.forEach((agentId, index) => {
+    if (index === ids.length - 1) { world.adoption[agentId] = 100 - assigned; return; }
+    const target = (weight[agentId] / total) * 100;
+    const next = Math.round(world.adoption[agentId] + (target - world.adoption[agentId]) * 0.2);
+    world.adoption[agentId] = next;
+    assigned += next;
+  });
 }

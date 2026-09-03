@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { ARENAS, ARENA_IDS, getArena } from "../arena/arenas.mjs";
+import { validateArenas } from "../arena/validate.mjs";
+import { agentSlots, countAllowed } from "../arena/slots.mjs";
 
-
-test("ships the Agent Arena product surface", async () => {
+test("ships the redesigned Agent Arena product surface", async () => {
   const [page, css, layout, hosting, schema, bridge] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
@@ -12,67 +14,59 @@ test("ships the Agent Arena product surface", async () => {
     readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
     readFile(new URL("../local-bridge/server.mjs", import.meta.url), "utf8"),
   ]);
-  assert.match(page, /Choose the world/);
-  assert.match(page, /START \{experimentModes/);
-  assert.match(page, /KILL SWITCH/);
-  assert.match(page, /REQUESTS/);
-  assert.match(page, /EVIDENCE THRESHOLD/);
-  assert.match(page, /verifyTask/);
-  assert.match(page, /observation window expired/);
-  assert.match(page, /SYSTEM INSTRUCTIONS/);
-  assert.match(page, /OBSERVE/);
-  assert.match(page, /EXECUTE/);
-  assert.match(page, /APPROVE/);
-  assert.match(page, /DENY/);
-  assert.match(page, /sendOperatorMessage/);
-  assert.match(page, /loadSession/);
-  assert.match(page, /downloadReport/);
-  assert.match(page, /LOCAL RUNTIME/);
-  assert.match(page, /loadProviderModels/);
-  assert.match(page, /OPEN BROWSER \/ SIGN IN/);
-  assert.match(page, /\/summary/);
-  assert.match(page, /history-open/);
-  assert.match(page, /Independent agent credentials/);
-  assert.match(page, /agentProviders\.alpha/);
-  assert.match(page, /agentProviders\.omega/);
-  assert.match(page, /EMPTY WORLD/);
-  assert.match(page, /COLONY ZERO/);
-  assert.match(page, /RIVALRY/);
-  assert.match(page, /COOPERATION/);
-  assert.match(page, /SHARED WORLD/);
-  assert.match(page, /DURABLE MEMORY/);
-  assert.match(page, /WHY IT IS WAITING/);
-  assert.match(page, /runtimeState/);
-  assert.match(page, /ACTIVE API KEY/);
-  assert.match(page, /VERIFY & CHANGE KEY/);
-  assert.match(page, /VERIFY & RESTORE KEY/);
-  assert.match(page, /rotateAgentKey/);
-  assert.match(page, /RECOVERED CHECKPOINT/);
-  assert.match(page, /hydrateLiveSession/);
-  assert.match(page, /sessions\/active/);
-  assert.match(page, /experimentMode/);
+
+  // The dashboard consumes the shared arena registry — no parallel hardcoded lists.
+  assert.match(page, /from "\.\.\/arena\/arenas\.mjs"/);
+  assert.match(page, /Choose the arena/);
+  assert.match(page, /ARENAS\.map/);
+  assert.doesNotMatch(page, /experimentModes|ExperimentMode|bareWorld/);
+
+  // Agent identity is slot-driven, not a hardcoded alpha/omega pair.
+  assert.match(page, /agentSlots/);
+  assert.match(page, /agentCount/);
+  assert.doesNotMatch(page, /agentProviders\.alpha|agentProviders\.omega/);
+
+  // Core control-room surface is intact.
+  for (const marker of [/KILL SWITCH/, /REQUESTS/, /verifyTask/, /sendOperatorMessage/, /loadSession/, /downloadReport/, /hydrateLiveSession/, /rotateAgentKey/, /loadProviderModels/, /OPEN BROWSER \/ SIGN IN/, /LOCAL RUNTIME/, /history-open/]) {
+    assert.match(page, marker, `page.tsx should contain ${marker}`);
+  }
+
+  // The bridge builds worlds from the registry and keeps the key-safety invariant.
   assert.match(bridge, /createWorld/);
-  assert.match(bridge, /executeWorldAction/);
+  assert.match(bridge, /getArena/);
+  assert.match(bridge, /agentSlots/);
   assert.match(bridge, /syncMemory/);
-  assert.match(bridge, /relationshipScore/);
-  assert.match(bridge, /describeAgentFailure/);
-  assert.match(bridge, /runInModelLane/);
-  assert.match(bridge, /keyIdentity/);
-  assert.match(bridge, /restoreSessions/);
-  assert.match(bridge, /scheduleSnapshot/);
-  assert.match(bridge, /detachForRestart/);
-  assert.match(bridge, /body\.action === "rotate_key"/);
-  assert.match(bridge, /action\.verb \|\| action\.operation \|\| action\.action/);
-  assert.match(bridge, /retryAt > Date\.now/);
-  assert.match(bridge, /apiKey: requested\.apiKey/);
-  assert.match(bridge, /buildAgent\("alpha", body\.agents\.alpha\)/);
-  assert.match(bridge, /buildAgent\("omega", body\.agents\.omega\)/);
-  assert.doesNotMatch(bridge, /session\.apiKey/);
+  assert.match(bridge, /rotate_key/);
+  assert.doesNotMatch(bridge, /modeRules/);
+  assert.doesNotMatch(bridge, /buildAgent\("alpha"/);
+  assert.doesNotMatch(bridge, /session\.apiKey/); // keys are never stored on the session object
+
   assert.match(css, /\.arena-grid/);
   assert.match(layout, /Agent Arena/);
-  assert.match(layout, /og\.png/);
   assert.match(hosting, /"d1": "DB"/);
   assert.match(schema, /experiments/);
+});
+
+test("the arena registry ships exactly the four redesigned arenas, all valid", () => {
+  assert.deepEqual(ARENA_IDS, ["duel", "solo", "builder", "society"]);
+  assert.deepEqual(validateArenas(), []);
+  const byId = Object.fromEntries(ARENAS.map((arena) => [arena.id, arena]));
+  assert.equal(byId.duel.agentRange.min, 2);
+  assert.equal(byId.duel.agentRange.max, 2);
+  assert.equal(byId.solo.agentRange.max, 1);
+  assert.equal(byId.builder.agentRange.min, 1);
+  assert.equal(byId.builder.agentRange.max, 3);
+  assert.equal(byId.society.agentRange.min, 3);
+  assert.equal(byId.society.agentRange.max, 8);
+});
+
+test("agent rosters honor each arena's range", () => {
+  assert.deepEqual(agentSlots(getArena("duel"), 2).map((s) => s.id), ["alpha", "omega"]);
+  assert.equal(agentSlots(getArena("solo"), 1).length, 1);
+  assert.equal(agentSlots(getArena("builder"), 3).length, 3);
+  assert.equal(agentSlots(getArena("society"), 8).length, 8);
+  assert.ok(!countAllowed(getArena("society"), 2));
+  assert.ok(!countAllowed(getArena("duel"), 3));
 });
 
 test("removes all disposable starter preview markers", async () => {

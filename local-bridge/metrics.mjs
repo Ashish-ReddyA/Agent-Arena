@@ -54,7 +54,7 @@ export function computeMetrics(session) {
     cooperationRatio: give + take ? Number((give / (give + take)).toFixed(2)) : null,
     beliefGap,
     adoption: world.adoption ? { ...world.adoption } : null,
-    score: world.scored ? { criterion, alpha: world.agents.alpha[criterion] || 0, omega: world.agents.omega[criterion] || 0 } : null,
+    score: world.scored ? { criterion, ...Object.fromEntries(Object.entries(world.agents || {}).map(([id, a]) => [id, a[criterion] || 0])) } : null,
     ...verbAnalysis(session),
     thingsMade: (world.mapCache || []).reduce((sum, place) => sum + (place.things || 0), 0) + (world.artifacts || []).length,
     switches: {

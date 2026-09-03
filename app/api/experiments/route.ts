@@ -15,6 +15,14 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { id?: string; name?: string; objective?: string; status?: string; payload?: string };
     if (!body.id || !body.name?.trim() || !body.objective?.trim()) return Response.json({ error: "id, name, and objective are required" }, { status: 400 });
+    if (typeof body.id !== "string" || body.id.length > 200) return Response.json({ error: "id is invalid" }, { status: 400 });
+    if (body.name.length > 300 || body.objective.length > 4000) return Response.json({ error: "name or objective is too long" }, { status: 400 });
+    if (body.status && !["draft", "running", "paused", "stopped", "failed", "completed"].includes(body.status)) return Response.json({ error: "status is invalid" }, { status: 400 });
+    if (body.payload != null) {
+      if (typeof body.payload !== "string" || body.payload.length > 500_000) return Response.json({ error: "payload is too large" }, { status: 413 });
+      // Payload is an opaque snapshot, but if it declares an arena id it must be a string.
+      try { const parsed = JSON.parse(body.payload) as { arenaId?: unknown }; if (parsed && parsed.arenaId != null && typeof parsed.arenaId !== "string") return Response.json({ error: "payload.arenaId must be a string" }, { status: 400 }); } catch { return Response.json({ error: "payload must be valid JSON" }, { status: 400 }); }
+    }
     const db = await getDb();
     await db.insert(experiments).values({ id: body.id, name: body.name.trim(), objective: body.objective.trim(), status: body.status ?? "draft", payload: body.payload ?? "{}" }).onConflictDoUpdate({ target: experiments.id, set: { name: body.name.trim(), objective: body.objective.trim(), status: body.status ?? "draft", payload: body.payload ?? "{}", updatedAt: sql`CURRENT_TIMESTAMP` } });
     const [experiment] = await db.select().from(experiments).where(eq(experiments.id, body.id)).limit(1);

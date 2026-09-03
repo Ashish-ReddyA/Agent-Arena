@@ -61,7 +61,7 @@ export function perceive(session, agentId) {
     };
     if (world.scored) {
       const criterion = world.scoreCriterion || "influence";
-      bareView.publicScore = { criterion, alpha: world.agents.alpha[criterion] || 0, omega: world.agents.omega[criterion] || 0 };
+      bareView.publicScore = { criterion, ...Object.fromEntries(Object.entries(world.agents || {}).map(([id, a]) => [id, a[criterion] || 0])) };
     }
     return bareView;
   }
@@ -85,7 +85,7 @@ export function perceive(session, agentId) {
   };
   if (world.scored) {
     const criterion = world.scoreCriterion || "influence";
-    snapshot.publicScore = { criterion, alpha: world.agents.alpha[criterion] || 0, omega: world.agents.omega[criterion] || 0 };
+    snapshot.publicScore = { criterion, ...Object.fromEntries(Object.entries(world.agents || {}).map(([id, a]) => [id, a[criterion] || 0])) };
   }
   if (world.adoption) snapshot.marketAttention = { ...world.adoption };
   return snapshot;
