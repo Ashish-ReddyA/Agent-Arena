@@ -1,3 +1,7 @@
+## September 5 Research Arcade verification
+
+Test catalog selection, six unique concepts, three categories, planned/runnable status, details dialog close/Escape/focus restoration, library, experiment history empty/error states, comparison of saved snapshots, correct workspace preset selection, access to legacy Duel/Solo/Builder/Society modes, and simulated start/pause/resume/end. Repeat at 1440x1000 and 390x844. Audit document horizontal overflow, visible buttons smaller than 40px and fields without labels. Capture screenshots of catalog and setup. Run TypeScript, ESLint, build, existing registry/bridge tests and browser tests. Verify latest remote source on push and distinguish source delivery from hosted deployment.
+
 # Agent Arena — Arena Redesign Test Plan
 
 ## Unit tests

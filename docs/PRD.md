@@ -1,3 +1,11 @@
+## September 5 Research Arcade UI scope
+
+The latest user request approves the uploaded dense dark arcade design. This pass changes presentation and navigation, not the runtime engine. Six catalog concepts are grouped: Build & Repair (Game Forge, Repair Bay), Play & Solve (Game Runner, Escape Room), Collaborate & Evolve (Tiny Civilization, Relay Studio). Game Forge and Repair Bay can open the existing Builder workspace, and Tiny Civilization can open Society; these are explicitly limited workspace presets, not finished game engines. Other concepts have browsable example protocols with clear Planned status. Rule Change is explained as planned structured intervention, never shown as a functioning switch. Existing runtime setup, provider selection, simulation, history, pause and stop stay reachable.
+
+Acceptance: exact six unique cards and three categories; selected preview changes with keyboard/click; example protocol is real readable content; supported presets fill correct runtime briefs; no misleading playable demo or invented results; saved-snapshot comparison, protocol library and empty/error states work; mobile and desktop journeys have no overflow, unlabeled fields or undersized controls.
+
+Earlier goal/winner/replay guarantees below were intended scope, not verified implemented behavior. Current UI must not repeat those promises.
+
 # Agent Arena — Arena System Redesign (PRD)
 
 ## Problem

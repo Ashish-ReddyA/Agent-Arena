@@ -15,7 +15,8 @@ page.on("pageerror", (err) => consoleErrors.push(String(err)));
 
 try {
   // 1. Application loads to the setup screen (cache-busted to avoid stale modules).
-  await page.goto(`${base}?t=${Date.now()}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.goto(`${base}?t=${Date.now()}`, { waitUntil: "networkidle", timeout: 30000 });
+  await page.getByRole("button", { name: /Runtime setup/ }).click();
   await page.waitForSelector(".experiment-mode-grid", { timeout: 30000 });
   // RSC hydrates asynchronously; wait until arena cards are interactive before clicking.
   await page.waitForFunction(() => {
