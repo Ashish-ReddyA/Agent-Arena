@@ -7,7 +7,7 @@ import { agentSlots, countAllowed } from "../arena/slots.mjs";
 
 test("ships the redesigned Agent Arena product surface", async () => {
   const [page, css, layout, hosting, schema, bridge] = await Promise.all([
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/LegacyRuntime.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../.openai/hosting.json", import.meta.url), "utf8"),
@@ -71,7 +71,7 @@ test("agent rosters honor each arena's range", () => {
 
 test("removes all disposable starter preview markers", async () => {
   const [page, layout, packageJson] = await Promise.all([
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/LegacyRuntime.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ]);
