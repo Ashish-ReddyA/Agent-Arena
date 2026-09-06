@@ -1,77 +1,38 @@
-# Agent Arena
+# Agent Arena — Research Arcade
 
-Agent Arena is a Gamemaster dashboard for running autonomous AI agents inside controlled experiment arenas. Each arena is a genuinely different research instrument — its own mechanics, its own agent roster — not a reskinned copy of one scaffold.
+Research Arcade now has six executable, bounded environments: Game Forge, Repair Bay, Game Runner, Escape Room, Tiny Civilization and Relay Studio. Choose an arena, select website or local execution, configure a model and budget, then inspect engine-verified results in the same interface.
 
-The hosted dashboard is the control room. Real execution happens through the Arena Local Bridge on the operator's Windows computer, where Docker containers, provider keys, and signed-in browser profiles remain local.
+Game Forge constructs playable 7×7 maze blueprints; Repair Bay repairs them; Game Runner explores a hidden maze; Escape Room combines private clues; Tiny Civilization allocates scarce resources; Relay Studio requires independent review before publishing a blueprint. Scheduled Rule Change interventions alter a constraint after a recorded turn. These first versions do not run arbitrary generated programs on the website.
 
-## The arenas
+## Start
 
-Arenas are defined once, in `arena/arenas.mjs`, and both the dashboard and the local bridge derive from that single registry. Each arena declares its mechanics (feature flags), its places, and an **agent range** — you choose how many agents enter, within the arena's rules.
+Requires Node 22.13+.
 
-- **Duel** (2 agents) — Two agents get the same objective and a public score; a winner is declared when the evidence threshold is met. Explicit head-to-head competition.
-- **Solo Sandbox** (1 agent) — One agent, open-ended, no assigned goal, no opponent, no score. The baseline/observation condition: what does a lone agent do with unstructured existence?
-- **Builder** (1–3 agents) — One or more agents iterate against a verifiable goal in a real workspace: code runs, builds pass or fail. The run ends when the goal check passes or the budget is exhausted.
-- **Society** (3–8 agents) — Many agents share one scarce world. Trade, agreements, and institutions are observable as they emerge.
-
-## Start a live run
-
-1. Start Docker Desktop and wait until it reports that Docker is running.
-2. Double-click `START_AGENT_ARENA.cmd` in this project folder. It starts both the local bridge and the local dashboard, then opens `http://localhost:3000`.
-3. Use the local dashboard for live Docker runs. Keep the Agent Arena launcher window open. The hosted site remains useful for the cloud dashboard and archived cloud sessions, but some browsers block hosted pages from reaching localhost.
-4. Choose an arena, then set the **agent count** within the arena's range. One credential card appears per agent slot.
-5. In each agent card, select its provider, enter its API key, load its models, and choose its model. Agents may use different OpenRouter, NVIDIA NIM, LM Studio, Ollama, or custom OpenAI-compatible accounts.
-6. Configure the objective, evidence markers, and permission modes, then start the run. Keys move into local bridge memory and are cleared from the dashboard fields.
-7. Use **Open browser / sign in** on an agent card when an account is needed. Complete passwords and MFA yourself in the isolated browser profile, then leave it open for the agent.
-8. Watch the activity feed, answer requests, verify evidence markers, or pause/terminate an agent at any time.
-
-For a dashboard-only rehearsal, choose **Simulation**. Simulation never calls a model or runs shell/browser actions.
-
-## Privacy and control boundary
-
-- Each agent has its own provider key. Keys are never written to disk, are never saved in session history, and are erased from bridge memory when that agent or the session stops.
-- Raw shell output and browser page contents stay local. The hosted dashboard receives only redacted, plain-language summaries.
-- The dashboard does not display or request private chain-of-thought. It shows understandable status, intent, actions, outcomes, and errors.
-- Each agent gets its own Docker workspace and its own persistent browser profile for that session.
-- Terminal, browser, hosting, posting, messaging, media, and analytics actions follow the configured observe/execute/approve/deny policy.
-- Network and publishing access can be revoked live. The kill switch removes the agent container.
-
-Use dedicated experiment accounts rather than personal accounts. Do not place secrets in prompts or task text.
-
-## Verification
-
-Build the hosted application:
-
-```powershell
-$env:WRANGLER_LOG_PATH='.wrangler/wrangler.log'
-npm exec vinext build
-node --test tests/rendered-html.test.mjs
+```
+npm ci
+npm run build
+npm start
 ```
 
-Run the arena registry unit tests:
+To execute on your own computer, start a second terminal with `npm run local:arcade` and select **On my computer**. The bounded runtime uses Node and supports OpenRouter, NVIDIA NIM, or local Ollama. Existing general Docker workspaces remain at `/advanced` and still require Docker and the original local bridge.
 
-```powershell
-node --test arena/arena.test.mjs
+Website execution runs the trusted engine on the server, using your model key in memory. No login or account is required. An anonymous session is created automatically; run snapshots and the session credential are saved in this tab's `sessionStorage`, separately for local and website execution. Refreshing preserves them. Export evidence before ending the browser session. Other browsers cannot recover your history. Browser session restoration or duplicated tabs can preserve/copy session storage.
+
+The runtime keeps temporary execution records in SQLite, protected by an unguessable session credential. Credentials expire after 24 hours; expired anonymous records are removed when a new session is created. A server redeploy can lose runtime records, while already saved browser snapshots remain readable in the same browser session. This is a Free preview; no paid disk or subscription is required.
+
+- [Deployment, local setup, limits, storage and security](docs/HOSTING.md)
+- [Implementation contract and scope](docs/HYBRID_IMPLEMENTATION.md)
+- [Verification and delivery report](docs/FINAL_REPORT.md)
+
+## Test
+
+```
+npm run typecheck
+npm run lint
+npm test
+npm run build
 ```
 
-Drive the dashboard end-to-end in a headless browser (dev server must be running):
+For Windows environments that block Node worker spawning, add `--experimental-test-isolation=none` to the Node test command. Engine and API integration tests use explicit test model fixtures; they are not evidence of a live model-provider or Render deployment.
 
-```powershell
-npm run dev
-node tests/e2e-smoke.mjs
-```
-
-Test the local multi-agent runtime and redaction boundary while the bridge is running:
-
-```powershell
-cd local-bridge
-npm run smoke
-```
-
-The smoke test uses different fake credentials per agent with a local mock provider, proves each Docker agent sends only its assigned key, confirms raw results and keys never reach dashboard telemetry or later model prompts, and removes the containers afterward.
-
-## Design docs
-
-- `docs/PRD.md` — the arena redesign product spec.
-- `docs/ARCHITECTURE.md` — the single-source arena registry and the agent-slot model.
-- `docs/TEST_PLAN.md` — unit, integration, API, UI, and security test plan.
-- `docs/FINAL_REPORT.md` — what was built, tested, and verified.
+The canonical bounded environment registry is `lab/engine.mjs`. The original Docker arena registry remains `arena/arenas.mjs` and is used only by the advanced workspace. Historical goal/winner/scientific benchmark promises for that older runtime are not verified by this release.

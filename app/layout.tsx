@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import "./arcade.css";
+import "./lab.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -13,7 +14,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = requestHeaders.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const origin = `${protocol}://${host}`;
   const title = "Agent Arena | Research Arcade";
-  const description = "Explore agent experiment concepts, configure local workspaces, and inspect recorded runs.";
+  const description = "Run bounded agent experiments locally or on the website, play generated mazes, and inspect private engine evidence.";
   return {
     title,
     description,

@@ -9,7 +9,9 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs",
+    "test": "node --test tests/rendered-html.test.mjs arena/arena.test.mjs lab/engine.test.mjs server/*.test.mjs local-bridge/tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "local:arcade": "node server/local-server.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

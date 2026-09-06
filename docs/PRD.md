@@ -1,3 +1,5 @@
+> Historical UI/Docker documentation. The current hybrid bounded-runtime design and verification are in [HYBRID_IMPLEMENTATION.md](HYBRID_IMPLEMENTATION.md), [HOSTING.md](HOSTING.md), and [FINAL_REPORT.md](FINAL_REPORT.md).
+
 ## September 5 Research Arcade UI scope
 
 The latest user request approves the uploaded dense dark arcade design. This pass changes presentation and navigation, not the runtime engine. Six catalog concepts are grouped: Build & Repair (Game Forge, Repair Bay), Play & Solve (Game Runner, Escape Room), Collaborate & Evolve (Tiny Civilization, Relay Studio). Game Forge and Repair Bay can open the existing Builder workspace, and Tiny Civilization can open Society; these are explicitly limited workspace presets, not finished game engines. Other concepts have browsable example protocols with clear Planned status. Rule Change is explained as planned structured intervention, never shown as a functioning switch. Existing runtime setup, provider selection, simulation, history, pause and stop stay reachable.

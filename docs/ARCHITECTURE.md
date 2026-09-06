@@ -1,3 +1,5 @@
+> Historical UI/Docker documentation. The current hybrid bounded-runtime design and verification are in [HYBRID_IMPLEMENTATION.md](HYBRID_IMPLEMENTATION.md), [HOSTING.md](HOSTING.md), and [FINAL_REPORT.md](FINAL_REPORT.md).
+
 ## September 5 Research Arcade UI architecture
 
 ArcadeCatalog is a client component mounted by Home as its default catalog screen. A separate typed presentation catalog declares six concepts and explicitly maps three to existing Builder/Society workspace presets. It does not add runtime arena ids. The existing arena registry remains authoritative for executable modes. Examples are declarative research protocols, not model-run results. Comparison reads existing snapshots without mutating them. No new API, secret, authentication, database schema or service. Illustration crops from the user-approved reference are bundled in self-contained SVG files embedding WebP images; no third-party image requests. Legacy setup/live controls receive a matching dark CSS layer. Deployment stays on the existing host and is not considered live without HTTP/browser evidence.
