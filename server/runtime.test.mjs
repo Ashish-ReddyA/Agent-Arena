@@ -13,13 +13,10 @@ test('private runtime authenticates, isolates owners, limits inputs and interrup
   const request = (path, body, token, method = body ? 'POST' : 'GET') => app.handle(new Request('http://localhost/api/lab/' + path, {method, headers:{'content-type':'application/json', ...(token ? {authorization:'Bearer '+token} : {})}, ...(body ? {body:JSON.stringify(body)} : {})}));
   try {
     assert.equal((await request('runs')).status,401);
-    assert.equal((await request('auth/register',{username:'alice',password:'short'})).status,400);
-    const a = await (await request('auth/register',{username:'alice',password:'secure-password-a'})).json();
-    const b = await (await request('auth/register',{username:'bob',password:'secure-password-b'})).json();
+    const a = await (await request('session',{})).json();
+    const b = await (await request('session',{})).json();
     assert.ok(a.token);
     assert.ok(!JSON.stringify(app.store.db.prepare('SELECT * FROM sessions').all()).includes(a.token));
-    assert.ok(!JSON.stringify(app.store.db.prepare('SELECT * FROM users').all()).includes('secure-password-a'));
-    assert.equal((await request('auth/login',{username:'alice',password:'wrong-password'})).status,401);
     assert.equal((await request('runs',{config:{arenaId:'game-runner',agentCount:1,seed:1,maxSteps:999999},provider:{id:'openrouter',model:'test',apiKey:'SECRET'},execution:'hosted'},a.token)).status,400);
     assert.equal((await request('runs',{config:{},provider:{id:'ollama',model:'test'},execution:'hosted'},a.token)).status,400);
     app.store.saveRun({id:'owned',ownerId:a.user.id,status:'running',config:{},state:{},usage:{},execution:'hosted',createdAt:1,updatedAt:1});
@@ -48,7 +45,7 @@ test('test-only deterministic transport persists genuine engine outcome without 
   }});
   const req=async(path,body,token)=>app.handle(new Request('http://localhost/api/lab/'+path,{method:body?'POST':'GET',headers:{'content-type':'application/json',...(token?{authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})}));
   try {
-    const {token}=await (await req('auth/register',{username:'tester',password:'test-password-long'})).json();
+    const {token}=await (await req('session',{})).json();
     const input={execution:'hosted',config:{arenaId:'game-forge',agentCount:2,seed:17,maxSteps:4},provider:{id:'openrouter',model:'test/fixture',apiKey:'SECRET-TEST-KEY'}};
     const first=await(await req('runs',input,token)).json();
     await new Promise(resolve=>setTimeout(resolve,10));
@@ -98,7 +95,7 @@ test('failure evidence keeps safe status categories and discards arbitrary provi
   const app=createLabHandler({dataDir:dir,transport:async()=>{throw new Error(message);}});
   const call=(path,body,token)=>app.handle(new Request('http://localhost/api/lab/'+path,{method:'POST',headers:{'content-type':'application/json',...(token?{authorization:'Bearer '+token}:{})},body:JSON.stringify(body)}));
   try{
-    const {token}=await(await call('auth/register',{username:'errors',password:'long-test-password'})).json();
+    const {token}=await(await call('session',{})).json();
     const input={execution:'hosted',config:{arenaId:'game-forge',agentCount:2,seed:17,maxSteps:4,objective:'x'.repeat(2000)},provider:{id:'openrouter',model:'test/fixture',apiKey:'SECRET-TEST-KEY'}};
     const first=await(await call('runs',input,token)).json();
     await new Promise(resolve=>setTimeout(resolve,10));

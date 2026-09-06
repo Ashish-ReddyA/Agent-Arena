@@ -71,24 +71,19 @@ export function createLabHandler(options={}) {
       const path=new URL(request.url).pathname.replace(/^\/api\/lab\/?/,'').replace(/\/$/,'');
       const method=request.method;
       if(path==='health'&&method==='GET')return json({ok:true,execution,storage:{type:'sqlite',warning:dir?'Durability requires an operator-mounted persistent disk at ARENA_DATA_DIR.':'Default .arena-data storage; hosted data may be lost on restart or redeploy without a persistent ARENA_DATA_DIR.'}});
-      if(/^auth\/(register|login)$/.test(path)&&method==='POST') {
-        throttle('auth-global',60);
-        const data=await body(request);
-        if(typeof data.username!=='string'||!/^[a-zA-Z0-9_-]{3,40}$/.test(data.username)||typeof data.password!=='string'||data.password.length<12||data.password.length>128)throw fail('Use a 3–40 character username and 12–128 character password');
-        const username=data.username.toLowerCase();throttle('auth:'+username,10);
-        return json(path.endsWith('register')?store.register(username,data.password):store.login(username,data.password));
-      }
+      if(/^auth\/(register|login)$/.test(path))return json({error:'Accounts are no longer used. Open a browser session.'},410);
+      if(path==='session'&&method==='POST'){throttle('session-global',60);await body(request);return json(store.anonymous(),201);}
       const token=request.headers.get('authorization')?.match(/^Bearer ([A-Za-z0-9_-]{43})$/)?.[1]||'';
-      const user=token&&store.user(token);if(!user)throw fail('Sign in required',401);
+      const user=token&&store.user(token);if(!user)throw fail('Browser session expired; reload to reconnect',401);
       throttle('requests:'+user.id,240);
-      if(path==='auth/me'&&method==='GET')return json({user});
+      if((path==='session'||path==='auth/me')&&method==='GET')return json({user});
       if(path==='auth/logout'&&method==='POST'){store.logout(token);return json({ok:true});}
       if(path==='runs'&&method==='GET')return json({runs:store.listRuns(user.id)});
       if(path==='runs'&&method==='POST') {
         const data=await body(request);if(data.execution!==execution)throw fail('Execution target does not match this runtime');
         let provider;try{provider=validateProvider(data.provider,execution);}catch(error){throw fail(error.message);}
         const settings=config(data.config);let state;try{state=createExperiment(settings);}catch(error){throw fail(error.message);}
-        const runs=store.listRuns(user.id);if(runs.length>=100||runs.reduce((sum,r)=>sum+JSON.stringify(r).length,0)>20_000_000)throw fail('Account storage cap reached; delete inactive runs',429);
+        const runs=store.listRuns(user.id);if(runs.length>=100||runs.reduce((sum,r)=>sum+JSON.stringify(r).length,0)>20_000_000)throw fail('Session storage cap reached; delete inactive runs',429);
         if(runs.filter(r=>r.status==='running').length>=2||active.size>=10)throw fail('Concurrent run limit reached',429);
         throttle('runs:'+user.id,10);
         const run={id:randomUUID(),ownerId:user.id,execution,status:'running',provider:{id:provider.id,model:provider.model},engineVersion:'1',limits:{maxSteps:settings.maxSteps,maxOutputTokens:8192,maxRequestOutputTokens:512,maxTimeMs:120000},config:settings,state,usage:{inputTokens:0,outputTokens:0,calls:0},createdAt:Date.now(),updatedAt:Date.now()};

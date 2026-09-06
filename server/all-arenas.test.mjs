@@ -44,8 +44,8 @@ for(const execution of ['hosted','local'])test(`${execution}: all six HTTP run l
   let app=createLabHandler({dataDir:dir,execution,transport:fixtureTransport()});
   const request=(path,body,token)=>app.handle(new Request('http://localhost/api/lab/'+path,{method:body?'POST':'GET',headers:{'content-type':'application/json',...(token?{authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})}));
   try{
-    const owner=await(await request('auth/register',{username:'owner',password:'owner-test-password'})).json();
-    const outsider=await(await request('auth/register',{username:'outsider',password:'outsider-test-password'})).json();
+    const owner=await(await request('session',{})).json();
+    const outsider=await(await request('session',{})).json();
     const ids=[];
     for(const arena of CATALOG){
       const response=await request('runs',{execution,config:{arenaId:arena.id,agentCount:2,seed:17,maxSteps:80},provider:{id:execution==='local'?'ollama':'openrouter',model:'fixture/model',apiKey:'TEST-SECRET-NOT-PERSISTED'}},owner.token);

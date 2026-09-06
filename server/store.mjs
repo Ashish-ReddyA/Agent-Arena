@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
 export class Store {
@@ -40,19 +40,16 @@ export class Store {
     }
     }catch(error){this.db?.close();process.removeListener('exit',this.releaseLock);this.releaseLock();throw error;}
   }
-  register(username,password) {
-    if (this.db.prepare('SELECT COUNT(*) AS n FROM users').get().n >= 1000) throw Object.assign(new Error('Account capacity reached'),{status:429});
-    const salt = randomBytes(16).toString('hex');
-    const user = {id:randomUUID(),username};
-    try { this.db.prepare('INSERT INTO users VALUES(?,?,?,?)').run(user.id,username,salt,scryptSync(password,salt,64).toString('hex')); }
-    catch (error) { if (String(error.message).includes('UNIQUE')) throw Object.assign(new Error('Username unavailable'),{status:409}); throw error; }
+  anonymous() {
+    this.prune();
+    if (this.db.prepare('SELECT COUNT(*) AS n FROM users').get().n >= 1000) throw Object.assign(new Error('Session capacity reached; retry later'),{status:429});
+    const user={id:randomUUID(),username:null};
+    this.db.prepare('INSERT INTO users VALUES(?,?,?,?)').run(user.id,null,null,null);
     return this.session(user);
   }
-  login(username,password) {
-    const user = this.db.prepare('SELECT * FROM users WHERE username=?').get(username);
-    const actual = scryptSync(password,user?.salt || 'constant-dummy-salt',64);
-    if (!user || !timingSafeEqual(actual,Buffer.from(user.password,'hex'))) throw Object.assign(new Error('Invalid credentials'),{status:401});
-    return this.session({id:user.id,username:user.username});
+  prune() {
+    this.db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());
+    this.db.exec('DELETE FROM runs WHERE ownerId IN (SELECT id FROM users WHERE username IS NULL AND id NOT IN (SELECT userId FROM sessions)); DELETE FROM users WHERE username IS NULL AND id NOT IN (SELECT userId FROM sessions);');
   }
   session(user) {
     this.db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());

@@ -18,7 +18,7 @@ const server=createServer(async(req,res)=>{
   }catch{res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({error:'Invalid request'}));}
 });
 server.requestTimeout=15000;server.headersTimeout=10000;server.maxConnections=100;
-server.listen(43822,'127.0.0.1',()=>console.log('Research Arcade local runtime: http://127.0.0.1:43822 (authentication required)'));
+server.listen(43822,'127.0.0.1',()=>console.log('Research Arcade local runtime: http://127.0.0.1:43822 (anonymous browser sessions)'));
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{app.close();server.close();});
 return {server,app};
 }

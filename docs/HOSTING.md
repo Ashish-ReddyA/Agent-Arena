@@ -1,3 +1,5 @@
+> Session-only preview update: account registration and login have been removed. The UI automatically opens an anonymous session and saves run snapshots in this tab's sessionStorage. Refreshes preserve history; export to keep it beyond the browser session. The runtime uses temporary, session-scoped execution records with 24-hour credentials. Expired anonymous records are cleaned up on new-session creation. Earlier account/persistent-history details below describe the previous implementation and no longer apply. No paid hosting is required.
+
 # Run Research Arcade
 
 This release runs on Node 22.13 or newer. The six bounded engines use trusted state-machine code and validated model JSON. No agent-generated program is executed in the web process. Game Forge and Repair Bay work on seven-by-seven maze blueprints, not arbitrary application repositories. Use Advanced Docker tools for the existing general local workspaces.
